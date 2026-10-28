@@ -1,0 +1,12 @@
+# 统一换行符：仓库内一律 LF，检出也保持 LF
+# （嵌入式工程里脚本、链接脚本、CubeMX 生成文件对换行敏感，统一后可避免
+#   跨平台协作时整片文件被判为改动）
+* text=auto eol=lf
+
+# 二进制文件：不做换行转换、不做 diff
+*.pptx binary
+*.png  binary
+*.jpg  binary
+*.ico  binary
+*.pdf  binary
+*.zip  binary

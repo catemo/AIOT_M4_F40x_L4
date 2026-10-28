@@ -1,0 +1,23 @@
+# ---- 构建产物 ----
+build/
+cmake-build-*/
+*.o
+*.obj
+*.elf
+*.hex
+*.bin
+*.map
+
+# ---- STM32CubeMX / IDE 生成物 ----
+mx.scratch
+!.settings
+
+# ---- 课件：只留本工程配套的 1.3，其余章节课件不入库（另有仓库存放）----
+docs/teaching/*.pptx
+!docs/teaching/1.3项目实操-构架搭建与分层与LED灯控制.pptx
+
+# ---- 编辑器 / 系统 ----
+.DS_Store
+Thumbs.db
+*.swp
+*~

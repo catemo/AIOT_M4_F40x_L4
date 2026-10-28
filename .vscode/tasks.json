@@ -1,0 +1,120 @@
+      
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "configure",
+      "type": "shell",
+      "command": "cmake",
+      "args": ["--preset", "Debug"],
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      }
+    },
+    {
+      "label": "build",
+      "type": "shell",
+      "command": "cmake",
+      "args": ["--build", "${workspaceFolder}/build/Debug"],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": {
+        "owner": "cpp",
+        "fileLocation": ["relative", "${workspaceFolder}/build/Debug"],
+        "pattern": {
+          "regexp": "^(.*):(\\d+):(\\d+):\\s+(error|warning|fatal error):\\s+(.*)$",
+          "file": 1,
+          "line": 2,
+          "column": 3,
+          "severity": 4,
+          "message": 5
+        }
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      }
+    },
+    {
+      "label": "clean",
+      "type": "shell",
+      "command": "cmake",
+      "args": ["--build", "${workspaceFolder}/build/Debug", "--target", "clean"],
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "rebuild",
+      "type": "shell",
+      "command": "cmake",
+      "args": ["--build", "${workspaceFolder}/build/Debug", "--clean-first"],
+      "problemMatcher": {
+        "owner": "cpp",
+        "fileLocation": ["relative", "${workspaceFolder}/build/Debug"],
+        "pattern": {
+          "regexp": "^(.*):(\\d+):(\\d+):\\s+(error|warning|fatal error):\\s+(.*)$",
+          "file": 1,
+          "line": 2,
+          "column": 3,
+          "severity": 4,
+          "message": 5
+        }
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      }
+    },
+    {
+      "label": "flash (ST-Link)",
+      "type": "shell",
+      "command": "STM32_Programmer_CLI",
+      "args": [
+        "-c", "port=SWD",
+        "-w", "${workspaceFolder}/build/Debug/${workspaceFolderBasename}.hex",
+        "-v",
+        "-rst"
+      ],
+      "dependsOn": ["build"],
+      "dependsOrder": "sequence",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      }
+    },
+    {
+      "label": "flash (J-Link)",
+      "type": "shell",
+      "command": "cmd",
+      "args": [
+        "/c",
+        "(echo device STM32F407ZE & echo if SWD & echo speed 4000 & echo halt & echo loadfile build/Debug/${workspaceFolderBasename}.hex  & echo r & echo g & echo exit) | JLink.exe"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "dependsOn": ["build"],
+      "dependsOrder": "sequence",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      }
+    }
+  ]
+}
+
+    

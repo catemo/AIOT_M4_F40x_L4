@@ -1,0 +1,224 @@
+/* USER CODE BEGIN Header */
+/**
+  ******************************************************************************
+  * @file    stm32f4xx_it.c
+  * @brief   Interrupt Service Routines.
+  ******************************************************************************
+  * @attention
+  *
+  * Copyright (c) 2026 STMicroelectronics.
+  * All rights reserved.
+  *
+  * This software is licensed under terms that can be found in the LICENSE file
+  * in the root directory of this software component.
+  * If no LICENSE file comes with this software, it is provided AS-IS.
+  *
+  ******************************************************************************
+  */
+/* USER CODE END Header */
+
+/* Includes ------------------------------------------------------------------*/
+#include "main.h"
+#include "stm32f4xx_it.h"
+/* Private includes ----------------------------------------------------------*/
+/* USER CODE BEGIN Includes */
+#include "usart.h"       /* CubeMX 生成的全局句柄 huart1（IDLE 判帧要读它的标志位） */
+#include "net_uart.h"    /* 网络层串口：本文件要在 IDLE 中断里调 net_uart_rx_idle_handler() */
+/* USER CODE END Includes */
+
+/* Private typedef -----------------------------------------------------------*/
+/* USER CODE BEGIN TD */
+
+/* USER CODE END TD */
+
+/* Private define ------------------------------------------------------------*/
+/* USER CODE BEGIN PD */
+
+/* USER CODE END PD */
+
+/* Private macro -------------------------------------------------------------*/
+/* USER CODE BEGIN PM */
+
+/* USER CODE END PM */
+
+/* Private variables ---------------------------------------------------------*/
+/* USER CODE BEGIN PV */
+
+/* USER CODE END PV */
+
+/* Private function prototypes -----------------------------------------------*/
+/* USER CODE BEGIN PFP */
+
+/* USER CODE END PFP */
+
+/* Private user code ---------------------------------------------------------*/
+/* USER CODE BEGIN 0 */
+
+/* USER CODE END 0 */
+
+/* External variables --------------------------------------------------------*/
+extern DMA_HandleTypeDef hdma_usart1_rx;
+extern UART_HandleTypeDef huart1;
+extern TIM_HandleTypeDef htim6;
+
+/* USER CODE BEGIN EV */
+
+/* USER CODE END EV */
+
+/******************************************************************************/
+/*           Cortex-M4 Processor Interruption and Exception Handlers          */
+/******************************************************************************/
+/**
+  * @brief This function handles Non maskable interrupt.
+  */
+void NMI_Handler(void)
+{
+  /* USER CODE BEGIN NonMaskableInt_IRQn 0 */
+
+  /* USER CODE END NonMaskableInt_IRQn 0 */
+  /* USER CODE BEGIN NonMaskableInt_IRQn 1 */
+   while (1)
+  {
+  }
+  /* USER CODE END NonMaskableInt_IRQn 1 */
+}
+
+/**
+  * @brief This function handles Hard fault interrupt.
+  */
+void HardFault_Handler(void)
+{
+  /* USER CODE BEGIN HardFault_IRQn 0 */
+
+  /* USER CODE END HardFault_IRQn 0 */
+  while (1)
+  {
+    /* USER CODE BEGIN W1_HardFault_IRQn 0 */
+    /* USER CODE END W1_HardFault_IRQn 0 */
+  }
+}
+
+/**
+  * @brief This function handles Memory management fault.
+  */
+void MemManage_Handler(void)
+{
+  /* USER CODE BEGIN MemoryManagement_IRQn 0 */
+
+  /* USER CODE END MemoryManagement_IRQn 0 */
+  while (1)
+  {
+    /* USER CODE BEGIN W1_MemoryManagement_IRQn 0 */
+    /* USER CODE END W1_MemoryManagement_IRQn 0 */
+  }
+}
+
+/**
+  * @brief This function handles Pre-fetch fault, memory access fault.
+  */
+void BusFault_Handler(void)
+{
+  /* USER CODE BEGIN BusFault_IRQn 0 */
+
+  /* USER CODE END BusFault_IRQn 0 */
+  while (1)
+  {
+    /* USER CODE BEGIN W1_BusFault_IRQn 0 */
+    /* USER CODE END W1_BusFault_IRQn 0 */
+  }
+}
+
+/**
+  * @brief This function handles Undefined instruction or illegal state.
+  */
+void UsageFault_Handler(void)
+{
+  /* USER CODE BEGIN UsageFault_IRQn 0 */
+
+  /* USER CODE END UsageFault_IRQn 0 */
+  while (1)
+  {
+    /* USER CODE BEGIN W1_UsageFault_IRQn 0 */
+    /* USER CODE END W1_UsageFault_IRQn 0 */
+  }
+}
+
+/**
+  * @brief This function handles Debug monitor.
+  */
+void DebugMon_Handler(void)
+{
+  /* USER CODE BEGIN DebugMonitor_IRQn 0 */
+
+  /* USER CODE END DebugMonitor_IRQn 0 */
+  /* USER CODE BEGIN DebugMonitor_IRQn 1 */
+
+  /* USER CODE END DebugMonitor_IRQn 1 */
+}
+
+/******************************************************************************/
+/* STM32F4xx Peripheral Interrupt Handlers                                    */
+/* Add here the Interrupt Handlers for the used peripherals.                  */
+/* For the available peripheral interrupt handler names,                      */
+/* please refer to the startup file (startup_stm32f4xx.s).                    */
+/******************************************************************************/
+
+/**
+  * @brief This function handles USART1 global interrupt.
+  */
+void USART1_IRQHandler(void)
+{
+  /* USER CODE BEGIN USART1_IRQn 0 */
+  /* ★ IDLE 判帧必须写在 HAL_UART_IRQHandler【之前】：
+   *   HAL 进来后会把读 DR / 清标志的例行处理做完，IDLE 标志可能被顺手清掉，
+   *   放在后面就永远检测不到"总线安静"。先查先清、再交给 HAL，
+   *   这两行的顺序就是串口链路的命门。
+   *   这里只调网络层的 net_uart_rx_idle_handler()：ISR 里只做"判帧 + 搬数据"
+   *   这一件事，不阻塞、不调任何 RTOS API。
+   *   ★ 优先级说明：USART1 抢占优先级 = 5，恰好等于 FreeRTOSConfig.h 里的
+   *     configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY = 5（临界值）。
+   *     本工程的统一纪律是：ISR 内一律不碰 RTOS API——判帧要越快越好，
+   *     而且把 FromISR 调用留在临界优先级上，容易在日后改优先级时踩雷。 */
+  if (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_IDLE))
+  {
+      __HAL_UART_CLEAR_IDLEFLAG(&huart1);
+      net_uart_rx_idle_handler();   /* 网络层：判帧并把新到的字节搬进环形缓冲 */
+  }
+  /* USER CODE END USART1_IRQn 0 */
+  HAL_UART_IRQHandler(&huart1);
+  /* USER CODE BEGIN USART1_IRQn 1 */
+
+  /* USER CODE END USART1_IRQn 1 */
+}
+
+/**
+  * @brief This function handles TIM6 global interrupt, DAC1 and DAC2 underrun error interrupts.
+  */
+void TIM6_DAC_IRQHandler(void)
+{
+  /* USER CODE BEGIN TIM6_DAC_IRQn 0 */
+
+  /* USER CODE END TIM6_DAC_IRQn 0 */
+  HAL_TIM_IRQHandler(&htim6);
+  /* USER CODE BEGIN TIM6_DAC_IRQn 1 */
+
+  /* USER CODE END TIM6_DAC_IRQn 1 */
+}
+
+/**
+  * @brief This function handles DMA2 stream2 global interrupt.
+  */
+void DMA2_Stream2_IRQHandler(void)
+{
+  /* USER CODE BEGIN DMA2_Stream2_IRQn 0 */
+
+  /* USER CODE END DMA2_Stream2_IRQn 0 */
+  HAL_DMA_IRQHandler(&hdma_usart1_rx);
+  /* USER CODE BEGIN DMA2_Stream2_IRQn 1 */
+
+  /* USER CODE END DMA2_Stream2_IRQn 1 */
+}
+
+/* USER CODE BEGIN 1 */
+
+/* USER CODE END 1 */

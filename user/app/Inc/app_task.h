@@ -1,0 +1,47 @@
+/**
+ ******************************************************************************
+ * @file    app_task.h
+ * @brief   应用层（app）—— 用户任务集中创建（任务的"排班表"）
+ *
+ *  为什么要单独搞一个 app_task.c？
+ *  因为 Core/Src/freertos.c 是 CubeMX 生成的，直接在里面写任务代码，
+ *  一旦 CubeMX 重新生成就有被冲掉的风险。所以只在它的 USER CODE 区里
+ *  留一行 app_taskCreate() 调用，把真正的任务创建都收在 user/ 里。
+ *
+ *  本文件只做"建任务"这一件事，不含任何业务逻辑；
+ *  任务具体干什么，写在各自的 app_xxx.c 里（例如 app_led.c / app_cmd.c）。
+ *
+ *  本工程建两个任务（串口控灯章节新增了第二个）：
+ *      app_led_task —— LED 闪烁：每 1ms 推进 APP_BLINK_process()
+ *      app_cmd_task —— 串口命令：收命令 → 解析 → 控灯
+ *  创建顺序先 LED 后串口：灯先初始化好，串口任务起来才能做"快闪 3 次"自检。
+ ******************************************************************************
+ */
+#ifndef APP_TASK_H
+#define APP_TASK_H
+
+/*----------------------------------------------------------------------------
+ * 函数功能：创建全部用户任务（本例程创建 2 个：app_led_task + app_cmd_task）
+ * 参数    ：无
+ * 返回值  ：无
+ * 调用处  ：Core/Src/freertos.c 的 MX_FREERTOS_Init() 里，
+ *           osKernelStart() 之前被调用
+ *           （位于该文件的 USER CODE BEGIN RTOS_THREADS 区域内）
+ *           完整启动链：main() → osKernelInitialize() → MX_FREERTOS_Init()
+ *                       → app_taskCreate() → osThreadNew()
+ * 注意事项：① 必须在调度器启动前调用。osThreadNew() 只是"登记"，任务要等
+ *              osKernelStart() 之后才会真正开始运行
+ *           ② 本函数不做任何业务初始化，只负责"建任务"；
+ *              业务初始化放在各任务自己的开头（例如 app_led_init()）
+ *           ③ 新增任务（按键、传感器…）统一写成
+ *              osThreadNew(xxx_task, NULL, &xxx_attr) 加在本函数里，
+ *              不要分散到各个 .c 去找
+ *           ④ 创建失败时句柄为 NULL；本例在这里进 Error_Handler() 停机，
+ *              避免任务静默丢失后"灯不亮又查不出原因"
+ *           ⑤ 任务栈大小/优先级来自 cfg 的 cfg_param.h，
+ *              注意堆空间由 FreeRTOSConfig.h 的 configTOTAL_HEAP_SIZE
+ *              (15360 字节) 限制，栈开太大可能创建失败
+ *----------------------------------------------------------------------------*/
+void app_taskCreate(void);
+
+#endif /* APP_TASK_H */
