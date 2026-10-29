@@ -5,11 +5,17 @@
  *
  *  本层只回答三个问题，一个比一个上层：
  *      报什么？      DHT11 的温湿度快照（不是"再读一次传感器"）
- *      多久报？      每 5 秒一次；断了就进离线缓存，恢复后按序补传
+ *      多久报？      每 5 秒一次（云端可改）；断了就进离线缓存，恢复后按序补传
  *      命令怎么应？  云端下发 LED_Control，落到与串口命令同一个入口，然后回响应
  *
+ *  华为云下行有三条通道（按主题分发，见 app_mqtt.c 的 app_mqtt_handle_downlink）：
+ *      commands/#      同步命令：执行 LED_Control 并回命令响应（request_id 原样带回）
+ *      properties/set/# 属性设置：publish_period_s（运行时改上报周期）/ led，
+ *                        回属性设置响应 {"result_code":0/1}
+ *      messages/down   消息下行：异步执行命令，不回响应（应答通道不存在）
+ *
  *  ★ 连接是【分段】做的，不是一锤子买卖：
- *      ① AT 测活 → ② STA 模式 → ③ 连 AP → ④ 建 TCP → ⑤ MQTT CONNECT → ⑥ 订阅
+ *      ① AT 测活 → ② STA 模式 → ③ 连 AP → ④ 建 TCP → ⑤ MQTT CONNECT → ⑥ 订阅三个下行主题
  *    分段的收益在"重连"上：重连时只补没成功的段，不从头再来一遍
  *    （WiFi 还好好的却去重连 WiFi，是最浪费时间的一种重连）。
  *
@@ -51,6 +57,13 @@
  *  ★ 鉴权参数由在线工具算好再填：不在 MCU 上实现 HMAC-SHA256，
  *    否则要拉进一整套加密库（几 KB FLASH + 一堆移植工作）。
  * ========================================================================== */
+/* 本机私有凭证（git 忽略）：存在则先引入 —— 下面占位符只在它没定义时生效 */
+#if __has_include("app_mqtt_secret.h")
+#include "app_mqtt_secret.h"
+#endif
+
+/* ---- 占位符（仅当私密文件没提供同名宏时才编译进来，避免 redefined 警告）---- */
+#ifndef APP_MQTT_WIFI_SSID
 #define APP_MQTT_WIFI_SSID      "your-wifi-ssid"         /* 必须是 2.4GHz！ESP8266 不支持 5GHz */
 #define APP_MQTT_WIFI_PWD       "your-wifi-password"
 
@@ -61,11 +74,7 @@
 #define APP_MQTT_CLIENT_ID      "your-device-id_0_0_0000000000"            /* 在线工具生成的 ClientId */
 #define APP_MQTT_USERNAME       "your-device-id"                           /* 在线工具生成的用户名 */
 #define APP_MQTT_AUTH_PASSWORD  "your-hmac-password"                       /* 在线工具生成的密码 */
-
-/* 本机私有凭证（git 忽略）：存在则整体覆盖上面的占位符 */
-#if __has_include("app_mqtt_secret.h")
-#include "app_mqtt_secret.h"
-#endif
+#endif /* !APP_MQTT_WIFI_SSID */
 
 /* 物模型里的服务 ID：必须与控制台"功能定义"里完全一致，
  * 不一致的后果是华为云静默丢弃属性——设备在线、日志显示 Published，

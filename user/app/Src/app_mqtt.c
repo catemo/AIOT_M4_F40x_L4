@@ -61,6 +61,7 @@ static char           s_topic[MOD_MQTT_TOPIC_MAX];        /* 主题（上报 / �
 static uint32_t       s_last_pub;                         /* 上次上报时刻（tick）                */
 static uint32_t       s_last_tx;                          /* 上次发出报文的时刻（心跳用）         */
 static uint32_t       s_last_flush;                       /* 上次补传时刻                        */
+static uint32_t       s_publish_period_ms = APP_MQTT_PUBLISH_PERIOD_MS; /* 上报周期：云端属性设置可改，掉电恢复默认 */
 static uint8_t        s_fail_count;                       /* 连续连接失败次数（退避用）           */
 
 /* 离线缓存：断网期间的数据进这里，恢复后按序补传；队满丢最旧 */
@@ -226,6 +227,42 @@ static void app_mqtt_build_topic_resp(const char *request_id)
     (void)app_cat(s_topic, n, sizeof(s_topic), request_id);
 }
 
+/* 属性设置订阅主题：$oc/devices/{device_id}/sys/properties/set/#
+ * ★ 华为云"属性设置"下行走这个主题（控制台 → 设备 → 属性设置），
+ *   载荷是物模型可写属性的 JSON，与命令下发是两条独立通道 */
+static void app_mqtt_build_topic_set_sub(void)
+{
+    uint32_t n = 0U;
+
+    n = app_cat(s_topic, n, sizeof(s_topic), "$oc/devices/");
+    n = app_cat(s_topic, n, sizeof(s_topic), APP_MQTT_DEVICE_ID);
+    (void)app_cat(s_topic, n, sizeof(s_topic), "/sys/properties/set/#");
+}
+
+/* 属性设置响应主题：$oc/devices/{device_id}/sys/properties/set/response/request_id={rid}
+ * ★ 与命令响应同理：rid 必须原样带回，否则云端"属性设置"一直转圈 */
+static void app_mqtt_build_topic_set_resp(const char *request_id)
+{
+    uint32_t n = 0U;
+
+    n = app_cat(s_topic, n, sizeof(s_topic), "$oc/devices/");
+    n = app_cat(s_topic, n, sizeof(s_topic), APP_MQTT_DEVICE_ID);
+    n = app_cat(s_topic, n, sizeof(s_topic), "/sys/properties/set/response/request_id=");
+    (void)app_cat(s_topic, n, sizeof(s_topic), request_id);
+}
+
+/* 消息下行订阅主题：$oc/devices/{device_id}/sys/messages/down
+ * ★ 华为云"消息下发"走这里（异步通道）：云端发什么设备收什么，
+ *   不需要也【不应该】回响应——应答通道不存在 */
+static void app_mqtt_build_topic_msg_down_sub(void)
+{
+    uint32_t n = 0U;
+
+    n = app_cat(s_topic, n, sizeof(s_topic), "$oc/devices/");
+    n = app_cat(s_topic, n, sizeof(s_topic), APP_MQTT_DEVICE_ID);
+    (void)app_cat(s_topic, n, sizeof(s_topic), "/sys/messages/down");
+}
+
 /* 上报载荷（华为云的物模型格式）：
  * {"services":[{"service_id":"Sensor","properties":{"temperature":29.4,"humidity":35.0}}]}
  *
@@ -369,7 +406,9 @@ static uint8_t app_mqtt_connect_all(void)
     (void)app_cat(line, pos, sizeof(line), "s)\r\n");
     MOD_UART1_SendString(line);
 
-    /* ⑥ 订阅命令主题 */
+    /* ⑥ 订阅下行主题（命令 / 属性设置 / 消息下行）
+     *    命令订阅失败 → 整段失败（可上报不可遥控是最差的"半吊子"）；两个新通道
+     *    失败 → 只告警继续（至少保住命令与上报，退化是可接受的降级） */
     app_mqtt_build_topic_cmd_sub();
     if (MOD_MQTT_Subscribe(s_topic, 1U) != MOD_MQTT_OK)
     {
@@ -381,6 +420,34 @@ static uint8_t app_mqtt_connect_all(void)
     pos = app_cat(line, pos, sizeof(line), s_topic);
     (void)app_cat(line, pos, sizeof(line), "\r\n");
     MOD_UART1_SendString(line);
+
+    app_mqtt_build_topic_set_sub();
+    if (MOD_MQTT_Subscribe(s_topic, 1U) != MOD_MQTT_OK)
+    {
+        MOD_UART1_SendString("[MQTT] properties/set subscribe failed (continue)\r\n");
+    }
+    else
+    {
+        pos = 0U;
+        pos = app_cat(line, pos, sizeof(line), "[MQTT] subscribed: ");
+        pos = app_cat(line, pos, sizeof(line), s_topic);
+        (void)app_cat(line, pos, sizeof(line), "\r\n");
+        MOD_UART1_SendString(line);
+    }
+
+    app_mqtt_build_topic_msg_down_sub();
+    if (MOD_MQTT_Subscribe(s_topic, 1U) != MOD_MQTT_OK)
+    {
+        MOD_UART1_SendString("[MQTT] messages/down subscribe failed (continue)\r\n");
+    }
+    else
+    {
+        pos = 0U;
+        pos = app_cat(line, pos, sizeof(line), "[MQTT] subscribed: ");
+        pos = app_cat(line, pos, sizeof(line), s_topic);
+        (void)app_cat(line, pos, sizeof(line), "\r\n");
+        MOD_UART1_SendString(line);
+    }
 
     s_last_tx   = osKernelGetTickCount();
     s_last_pub  = s_last_tx;
@@ -423,14 +490,25 @@ static void app_mqtt_backoff(uint8_t fail_count)
  *  五、命令处理：云端下发 → 执行 → 回响应
  * ========================================================================== */
 
-/* 从 JSON 里取 "led" 的值（不引 JSON 库：只有这一个整数字段，够用）
+/* 从 JSON 里取指定 key 的整数值（不引 JSON 库：字段都平铺在 payload 里，够用）
+ * 内部按 "\"key\"" 精确匹配（带引号），避免 "led" 误中 "led_xxx" 之类子串
  * 返回 -1 = 没找到 */
-static int16_t app_mqtt_parse_led(const char *json)
+static int16_t app_mqtt_parse_int(const char *json, const char *key)
 {
+    char     search[24];
+    uint32_t i = 0U;
     const char *p;
     int16_t     val = -1;
 
-    p = strstr(json, "\"led\"");
+    search[i++] = '"';
+    while ((*key != '\0') && ((i + 1U) < sizeof(search)))
+    {
+        search[i++] = *key++;
+    }
+    search[i++] = '"';
+    search[i] = '\0';
+
+    p = strstr(json, search);
     if (p == NULL)
     {
         return -1;
@@ -474,27 +552,12 @@ static void app_mqtt_parse_request_id(const char *topic, char *out, uint32_t cap
     out[n] = '\0';
 }
 
-static void app_mqtt_handle_cmd(MOD_MQTT_Msg_t *msg)
+/* 执行 LED 控制（与串口命令同一个入口：云端只是多了一个"遥控器"）
+ * 返回 result_code：0=成功，1=执行失败（LED 链被裁剪 / 值非法）
+ * ★ 手动接管的语义 1.3 就写好了。若直接操作引脚，闪烁状态机会在
+ *   半周期后把它翻回来——现象是"云端下发成功，灯闪了一下又灭了"。 */
+static int16_t app_mqtt_exec_led(int16_t led)
 {
-    char     line[APP_MQTT_PRINT_BUF_SIZE];
-    char     rid[48];   /* ★ 与 MOD_MQTT_TOPIC_MAX 是一对：主题缓冲必须装得下
-                         *   "固定部分 + 这里能装下的最长 rid"，否则响应主题被截断 */
-    uint32_t pos;
-    int16_t  led;
-    int16_t  result_code = 0;
-
-    led = app_mqtt_parse_led(msg->payload);
-    app_mqtt_parse_request_id(msg->topic, rid, sizeof(rid));
-
-    pos = 0U;
-    pos = app_cat(line, pos, sizeof(line), "[MQTT-CMD] LED_Control led=");
-    pos = app_cat_u32(line, pos, sizeof(line), (led < 0) ? 99U : (uint32_t)led);
-    (void)app_cat(line, pos, sizeof(line), "\r\n");
-    MOD_UART1_SendString(line);
-
-    /* ★ 落到与串口命令同一个入口：手动接管的语义 1.3 就写好了，
-     *   云端只是多了一个"遥控器"。若直接操作引脚，闪烁状态机会在
-     *   半周期后把它翻回来——现象是"云端下发成功，灯闪了一下又灭了"。 */
     switch (led)
     {
         case 0:
@@ -506,33 +569,55 @@ static void app_mqtt_handle_cmd(MOD_MQTT_Msg_t *msg)
             (void)PER_LED_Off(PER_LED2);
 #endif
             MOD_UART1_SendString("[MQTT-CMD] all LEDs OFF\r\n");
-            break;
+            return 0;
 
         case 1:
 #if APP_BLINK_ENABLE
             (void)APP_BLINK_On(APP_BLINK_LED1);
             MOD_UART1_SendString("[MQTT-CMD] LED1 ON\r\n");
+            return 0;
 #else
             MOD_UART1_SendString("[MQTT-CMD] LED1 unavailable (blink chain off)\r\n");
-            result_code = 1;
+            return 1;
 #endif
-            break;
 
         case 2:
 #if PER_LED_ENABLE
             (void)PER_LED_On(PER_LED2);
             MOD_UART1_SendString("[MQTT-CMD] LED2 ON\r\n");
+            return 0;
 #else
             MOD_UART1_SendString("[MQTT-CMD] LED2 unavailable (per_led off)\r\n");
-            result_code = 1;
+            return 1;
 #endif
-            break;
 
         default:
             MOD_UART1_SendString("[MQTT-CMD] unknown led value -> result_code=1\r\n");
-            result_code = 1;
-            break;
+            return 1;
     }
+}
+
+/* 同步命令通道（$oc/devices/{id}/sys/commands/#）：
+ * 执行后必须回响应，request_id 原样带回 */
+static void app_mqtt_handle_cmd(MOD_MQTT_Msg_t *msg)
+{
+    char     line[APP_MQTT_PRINT_BUF_SIZE];
+    char     rid[48];   /* ★ 与 MOD_MQTT_TOPIC_MAX 是一对：主题缓冲必须装得下
+                         *   "固定部分 + 这里能装下的最长 rid"，否则响应主题被截断 */
+    uint32_t pos;
+    int16_t  led;
+    int16_t  result_code;
+
+    led = app_mqtt_parse_int(msg->payload, "led");
+    app_mqtt_parse_request_id(msg->topic, rid, sizeof(rid));
+
+    pos = 0U;
+    pos = app_cat(line, pos, sizeof(line), "[MQTT-CMD] LED_Control led=");
+    pos = app_cat_u32(line, pos, sizeof(line), (led < 0) ? 99U : (uint32_t)led);
+    (void)app_cat(line, pos, sizeof(line), "\r\n");
+    MOD_UART1_SendString(line);
+
+    result_code = app_mqtt_exec_led(led);
 
     /* 回响应：主题里的 request_id 必须与下发时一致，
      * 否则控制台上的"命令-响应"配不成对，一直显示等待响应 */
@@ -556,6 +641,122 @@ static void app_mqtt_handle_cmd(MOD_MQTT_Msg_t *msg)
     }
     s_last_tx = osKernelGetTickCount();
     MOD_UART1_SendString("[MQTT-CMD] response sent\r\n");
+}
+
+/* 属性设置通道（$oc/devices/{id}/sys/properties/set/#）：
+ * 载荷格式 {"service_id":"Sensor","properties":{...}}，支持的可写属性：
+ *   publish_period_s —— 上报周期（秒，1~3600），运行时生效（M4 无 EEPROM 持久化，
+ *                        掉电恢复编译期默认值 APP_MQTT_PUBLISH_PERIOD_MS）
+ *   led             —— 驱动执行器（与命令下发同一入口）
+ * 应答发到 properties/set/response/request_id={rid}，{"result_code":0/1} */
+static void app_mqtt_handle_set(MOD_MQTT_Msg_t *msg)
+{
+    char     line[APP_MQTT_PRINT_BUF_SIZE];
+    char     rid[48];
+    uint32_t pos;
+    int16_t  period_s;
+    int16_t  led;
+    uint8_t  applied = 0U;
+
+    app_mqtt_parse_request_id(msg->topic, rid, sizeof(rid));
+    if (rid[0] == '\0')
+    {
+        MOD_UART1_SendString("[MQTT-SET] no request_id in topic, response skipped\r\n");
+        return;
+    }
+
+    /* 可写属性 1：上报周期 publish_period_s（秒）→ 运行时生效 */
+    period_s = app_mqtt_parse_int(msg->payload, "publish_period_s");
+    if (period_s > 0)
+    {
+        if ((period_s >= 1) && (period_s <= 3600))
+        {
+            s_publish_period_ms = (uint32_t)period_s * 1000U;
+            pos = 0U;
+            pos = app_cat(line, pos, sizeof(line), "[MQTT-SET] publish_period_s=");
+            pos = app_cat_u32(line, pos, sizeof(line), (uint32_t)period_s);
+            pos = app_cat(line, pos, sizeof(line), "s -> ");
+            pos = app_cat_u32(line, pos, sizeof(line), s_publish_period_ms);
+            (void)app_cat(line, pos, sizeof(line), "ms (runtime only)\r\n");
+            MOD_UART1_SendString(line);
+            applied = 1U;
+        }
+        else
+        {
+            pos = 0U;
+            pos = app_cat(line, pos, sizeof(line), "[MQTT-SET] publish_period_s out of range: ");
+            pos = app_cat_u32(line, pos, sizeof(line), (uint32_t)period_s);
+            (void)app_cat(line, pos, sizeof(line), " (1~3600)\r\n");
+            MOD_UART1_SendString(line);
+        }
+    }
+
+    /* 可写属性 2：led 驱动执行器 */
+    led = app_mqtt_parse_int(msg->payload, "led");
+    if (led >= 0)
+    {
+        if (app_mqtt_exec_led(led) == 0)
+        {
+            applied = 1U;
+        }
+    }
+
+    app_mqtt_build_topic_set_resp(rid);
+    if (applied != 0U)
+    {
+        (void)MOD_MQTT_Publish(s_topic, "{\"result_code\":0}");
+    }
+    else
+    {
+        MOD_UART1_SendString("[MQTT-SET] no writable property applied\r\n");
+        (void)MOD_MQTT_Publish(s_topic, "{\"result_code\":1}");
+    }
+    s_last_tx = osKernelGetTickCount();
+    MOD_UART1_SendString("[MQTT-SET] response sent\r\n");
+}
+
+/* 消息下行通道（$oc/devices/{id}/sys/messages/down，异步）：
+ * 云端发什么收什么；识别到 JSON 命令（如 {"led":1}）就执行，【不回响应】
+ * ——应答通道不存在，硬回会破坏"消息"语义 */
+static void app_mqtt_handle_msg(MOD_MQTT_Msg_t *msg)
+{
+    char     line[APP_MQTT_PRINT_BUF_SIZE];
+    uint32_t pos;
+    int16_t  led;
+
+    pos = 0U;
+    pos = app_cat(line, pos, sizeof(line), "[MQTT-MSG] async message: ");
+    (void)app_cat(line, pos, sizeof(line), msg->payload);
+    (void)app_cat(line, pos, sizeof(line), "\r\n");
+    MOD_UART1_SendString(line);
+
+    led = app_mqtt_parse_int(msg->payload, "led");
+    if (led < 0)
+    {
+        MOD_UART1_SendString("[MQTT-MSG] no led field, ignored (async, no response)\r\n");
+        return;
+    }
+    (void)app_mqtt_exec_led(led);
+    MOD_UART1_SendString("[MQTT-MSG] async command executed (no response)\r\n");
+}
+
+/* 下行分发：按主题区分三个通道
+ *   properties/set → 属性设置（回属性设置响应）
+ *   messages/down → 消息下行（执行不回响应）
+ *   其余（commands/#）→ 同步命令（回命令响应） */
+static void app_mqtt_handle_downlink(MOD_MQTT_Msg_t *msg)
+{
+    if (strstr(msg->topic, "properties/set") != NULL)
+    {
+        app_mqtt_handle_set(msg);
+        return;
+    }
+    if (strstr(msg->topic, "messages/down") != NULL)
+    {
+        app_mqtt_handle_msg(msg);
+        return;
+    }
+    app_mqtt_handle_cmd(msg);
 }
 
 /* ==========================================================================
@@ -596,8 +797,8 @@ void app_mqtt_task(void *argument)
 
         now = osKernelGetTickCount();
 
-        /* ③ 周期上报：到点了就上报一组"快照" */
-        if ((now - s_last_pub) >= APP_MQTT_PUBLISH_PERIOD_MS)
+        /* ③ 周期上报：到点了就上报一组"快照"（周期可被云端属性设置运行时修改） */
+        if ((now - s_last_pub) >= s_publish_period_ms)
         {
             uint8_t have_data = 1U;
 
@@ -677,10 +878,11 @@ void app_mqtt_task(void *argument)
             }
         }
 
-        /* ⑤ 收一包：把 +IPD 里的报文解析成命令（内部顺带回 PUBACK） */
+        /* ⑤ 收一包：把 +IPD 里的报文解析成下行（内部顺带回 PUBACK），
+         *    再按主题分发给 命令 / 属性设置 / 消息下行 三个通道 */
         if (MOD_MQTT_Poll(&s_msg) != 0U)
         {
-            app_mqtt_handle_cmd(&s_msg);
+            app_mqtt_handle_downlink(&s_msg);
         }
 
         /* ⑥ TCP 被对端关掉：立刻标记断开，下一圈走重连 */
