@@ -37,8 +37,8 @@
 #error "APP_LED_ENABLE requires APP_BLINK_ENABLE"  /* 业务要靠闪烁状态机干活，两者必须同开 */
 #endif
 
-#if APP_TASK_ENABLE && !APP_LED_ENABLE && !APP_UART1_ENABLE && !APP_DHT11_ENABLE && !APP_MQTT_ENABLE && !APP_LOGGER_ENABLE
-#error "APP_TASK_ENABLE requires APP_LED_ENABLE or APP_UART1_ENABLE or APP_DHT11_ENABLE or APP_MQTT_ENABLE or APP_LOGGER_ENABLE"   /* 至少要有一个任务可建，否则排班表是空的 */
+#if APP_TASK_ENABLE && !APP_LED_ENABLE && !APP_UART1_ENABLE && !APP_DHT11_ENABLE && !APP_MQTT_ENABLE && !APP_LOGGER_ENABLE && !APP_WATCHDOG_ENABLE
+#error "APP_TASK_ENABLE requires APP_LED_ENABLE or APP_UART1_ENABLE or APP_DHT11_ENABLE or APP_MQTT_ENABLE or APP_LOGGER_ENABLE or APP_WATCHDOG_ENABLE"   /* 至少要有一个任务可建，否则排班表是空的 */
 #endif
 
 /* ==========================================================================
@@ -305,7 +305,12 @@
 #error "storage chain requires MOD_UART1_ENABLE (its log lines go through MOD_UART1_SendString)"
 #endif
 
-/* ④ 日志的取材是 DHT11 快照（跨链依赖，漏配要到链接期才炸，必须编译期拦下） */
+/* ④ 日志的取材是 DHT11 快照（跨链依赖）
+ *   ★ 2.4 已把这条依赖写进 cfg_switch.h 的开关表达式：
+ *     APP_LOGGER_ENABLE = (MOD_FLASH_ENABLE && APP_DHT11_ENABLE)
+ *     ——所以关 DHT11 链时日志层自动跟着关，正常配置下本闸门【永远不会响】。
+ *   留着它是"回归闸门"：谁把那个表达式改回 (MOD_FLASH_ENABLE)，关 DHT11 时
+ *   就会在这里被编译期拦下，而不是等到链接期才发现 APP_DHT11_GetSnapshot 找不到。 */
 #if APP_LOGGER_ENABLE && !APP_DHT11_ENABLE
 #error "APP_LOGGER_ENABLE requires APP_DHT11_ENABLE (log records come from the DHT11 snapshot)"
 #endif
@@ -342,6 +347,66 @@
  * 周期太短会把存储任务自己拍满，还挤占同拍的上云上报 */
 #if APP_LOGGER_ENABLE && (APP_LOGGER_PERIOD_MS < 1000)
 #error "APP_LOGGER_PERIOD_MS requires >= 1000 (worst append = sector erase 400 ms + program + verify)"
+#endif
+
+/* ==========================================================================
+ *  十一、看门狗链依赖校验（2.4 新增，3 条：应用层 → 感知层 → HAL，含一条跨链）
+ * ========================================================================== */
+
+/* ① 喂狗业务要落到感知层驱动：app_watchdog 只认 PER_IWDG_* */
+#if APP_WATCHDOG_ENABLE && !PER_IWDG_ENABLE
+#error "APP_WATCHDOG_ENABLE requires PER_IWDG_ENABLE"   /* 喂狗动作最终要落到 HAL_IWDG_Refresh */
+#endif
+
+/* ② 感知层要 HAL 的 IWDG 驱动真的被编进来（与 UART 同一条规矩） */
+#if PER_IWDG_ENABLE && !HAL_IWDG_MODULE_ENABLE
+#error "PER_IWDG_ENABLE requires HAL_IWDG_MODULE_ENABLE"   /* 还须 hal_conf.h 里打开 HAL_IWDG_MODULE_ENABLED */
+#endif
+
+/* ③ 打印要走串口链的平台层入口（跨链依赖，与 app_dht11 / 存储链同一条规矩） */
+#if APP_WATCHDOG_ENABLE && !MOD_UART1_ENABLE
+#error "APP_WATCHDOG_ENABLE requires MOD_UART1_ENABLE"   /* [WDT] 日志行只认 MOD_UART1_* 出口 */
+#endif
+
+/* ==========================================================================
+ *  十二、看门狗链参数体检（2.4 新增，6 条）
+ * ========================================================================== */
+
+/* 预分频合法集：IWDG 的 PR 寄存器只有 3 位有效，硬件只认这 7 个分频。
+ * 填别的数编译能过，但 per_iwdg.c 的映射表查不到 → 初始化直接进 assert 停机，
+ * 不如编译期就拦下。 */
+#if PER_IWDG_ENABLE && (PER_IWDG_DIV != 4) && (PER_IWDG_DIV != 8) && \
+    (PER_IWDG_DIV != 16) && (PER_IWDG_DIV != 32) && (PER_IWDG_DIV != 64) && \
+    (PER_IWDG_DIV != 128) && (PER_IWDG_DIV != 256)
+#error "PER_IWDG_DIV requires one of 4/8/16/32/64/128/256 (IWDG PR is 3-bit)"
+#endif
+
+/* 重载值上限：RLR 是 12 位寄存器，超过 4095 的高位会被硬件静默截断——
+ * 实际超时比你想的短，"为什么不按设定的超时复位"能查到怀疑人生。 */
+#if PER_IWDG_ENABLE && ((PER_IWDG_RELOAD < 1U) || (PER_IWDG_RELOAD > 4095U))
+#error "PER_IWDG_RELOAD requires 1..4095 (IWDG RLR is 12-bit)"
+#endif
+
+/* 喂狗周期底线：喂狗间隔必须远小于超时，否则一次任务抖动就咬狗。
+ * 取"周期 × 2 ≤ 超时"作底线（500 ms vs 3000 ms 时余量 2.5 s）。
+ * 注意 PER_IWDG_TIMEOUT_MS 是派生宏，DIV/RELOAD 一改它自动跟着变。 */
+#if APP_WATCHDOG_ENABLE && ((APP_WDT_FEED_PERIOD_MS * 2U) > PER_IWDG_TIMEOUT_MS)
+#error "APP_WDT_FEED_PERIOD_MS x 2 must fit in PER_IWDG_TIMEOUT_MS (feed margin)"
+#endif
+
+/* Alive 节奏下限：填 0 会出现除 0，先单独拦住 */
+#if APP_WATCHDOG_ENABLE && (APP_WDT_ALIVE_EVERY < 1U)
+#error "APP_WDT_ALIVE_EVERY requires >= 1"
+#endif
+
+/* 看门狗任务栈下限：同一条 512 底线（本任务实际给的就是 512） */
+#if APP_WATCHDOG_ENABLE && (APP_WDT_TASK_STACK_SIZE < 512)
+#error "APP_WDT_TASK_STACK_SIZE requires >= 512 (unit: BYTES = configMINIMAL_STACK_SIZE x 4)"
+#endif
+
+/* 看门狗任务优先级范围：与其余任务同一条规则 */
+#if APP_WATCHDOG_ENABLE && ((APP_WDT_TASK_PRIO < 1) || (APP_WDT_TASK_PRIO >= 56))
+#error "APP_WDT_TASK_PRIO requires 1 .. (configMAX_PRIORITIES - 1), configMAX_PRIORITIES = 56"
 #endif
 
 #endif /* CFG_CHECK_H */

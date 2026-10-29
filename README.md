@@ -1,4 +1,4 @@
-# IOT_M4_L4 · STM32F407 四层架构「串口控灯 + DHT11 + WiFi-MQTT 上云例程」
+﻿# IOT_M4_L4 · STM32F407 四层架构「串口控灯 + DHT11 + WiFi-MQTT 上云 + 看门狗例程」
 
 ![MCU](https://img.shields.io/badge/MCU-STM32F407ZETx-1E6BFF?style=flat-square)
 ![Architecture](https://img.shields.io/badge/Architecture-4%20Layer-12B8A6?style=flat-square)
@@ -10,22 +10,24 @@
 ![Toolchain](https://img.shields.io/badge/Toolchain-arm--none--eabi--gcc%2014.3.1-6B7A90?style=flat-square)
 ![License](https://img.shields.io/badge/License-MIT-12B8A6?style=flat-square)
 
-> 在**刻意做到最小**的 STM32 工程上再进三步：先接一条串口（1.3），再接一个单总线传感器（1.4），
-> 最后把数据经 ESP8266 用 MQTT 送上华为云并接收云端命令（2.2），
-> 把「四层怎么分、不定长帧怎么收、单总线时序怎么守、AT 会话与 MQTT 报文怎么落到四层里、配置怎么收口、三个控灯来源怎么不打架」讲透。
+> 在**刻意做到最小**的 STM32 工程上再进五步：先接一条串口（1.3），再接一个单总线传感器（1.4），
+> 把数据经 ESP8266 用 MQTT 送上华为云并接收云端命令（2.2），再接外部存储器 EEPROM/FLASH（2.3），
+> 最后配上 IWDG 独立看门狗（2.4），
+> 把「四层怎么分、不定长帧怎么收、单总线时序怎么守、AT 会话与 MQTT 报文怎么落到四层里、配置怎么收口、三个控灯来源怎么不打架、跑飞的整机怎么自己救回来」讲透。
 >
 > 演进：纯闪烁 `v2.1b`（15 文件 / 1091 行）→ 加串口（21 文件 / 2267 行）→ 加 DHT11（29 文件 / 3677 行）
-> → 加 WiFi-MQTT 上云（37 文件 / 6639 行）→ 加外部存储器 EEPROM/FLASH（**50 文件 / 9730 行**，
-> 另有横切 `common/` 3 文件 / 127 行）。
-> 2.2 上云章节新增 8 个文件 / 2563 行；2.3 存储章节新增 **12 个文件 / 2146 行**，
-> 并把 `net_uart` 从"单实例"改成**实例表**（一条代码管两个串口）。
+> → 加 WiFi-MQTT 上云（37 文件 / 6639 行）→ 加外部存储器 EEPROM/FLASH（50 文件 / 9730 行）
+> → 加 IWDG 看门狗（**54 文件 / 10616 行**，另有横切 `common/` 3 文件 / 127 行）。
+> 2.2 上云章节新增 8 个文件 / 2563 行；2.3 存储章节新增 12 个文件 / 2146 行，
+> 并把 `net_uart` 从"单实例"改成**实例表**（一条代码管两个串口）；
+> 2.4 看门狗章节新增 4 个文件 / 389 行，并对账修正上云应用层的既有增长（`app_mqtt` +274 行）。
 >
-> 最终形态：**六条链 · 两个合流点** —— LED 链（两跳）、串口链（三跳）、DHT11 链（两跳）、上云链（五跳）、
-> 参数链（三跳：AT24C02）、日志链（三跳：W25Q64）。
+> 最终形态：**七条链 · 两个合流点** —— LED 链（两跳）、串口链（三跳）、DHT11 链（两跳）、上云链（五跳）、
+> 参数链（三跳：AT24C02）、日志链（三跳：W25Q64）、看门狗链（两跳：IWDG 片上外设，不占引脚）。
 > 本工程是培训课件《1.3 项目实操-构架搭建与分层与 LED 灯控制》《1.4 项目实操-DHT11 传感器与 LED 灯联动》
-> 与《2.2 项目实操-WiFi-MQTT 上云》的配套源码。
+> 《2.2 项目实操-WiFi-MQTT 上云》与《2.4 项目实操-看门狗》的配套源码。
 
-**适合谁看**：已经跑通四层闪灯、想接串口与传感器并对齐"感知 / 网络 / 平台 / 应用"四层口径的嵌入式新手；需要一套干净的"DMA + IDLE + 环形缓冲"、"单总线微秒时序"或"ESP8266 AT + MQTT 报文手搓"模板的开发者；要讲 1.3 / 1.4 / 2.2 章节的老师。
+**适合谁看**：已经跑通四层闪灯、想接串口与传感器并对齐"感知 / 网络 / 平台 / 应用"四层口径的嵌入式新手；需要一套干净的"DMA + IDLE + 环形缓冲"、"单总线微秒时序"、"ESP8266 AT + MQTT 报文手搓"或"IWDG 看门狗接入"模板的开发者；要讲 1.3 / 1.4 / 2.2 / 2.4 章节的老师。
 
 ---
 
@@ -38,12 +40,11 @@
 - [目录结构](#目录结构)
 - [改配置：只动 cfg 一个目录](#改配置只动-cfg-一个目录)
 - [四层架构一览](#四层架构一览)
-- [用户代码清单](#用户代码清单50-个文件--9730-行)
+- [用户代码清单](#用户代码清单54-个文件--10616-行)
 - [设计要点](#设计要点)
 - [资源占用](#资源占用)
 - [文档](#文档)
 - [常见问题](#常见问题)
-- [与 v2.1b 的差异](#与-v21b-的差异)
 - [与五层参考工程的关系](#与五层参考工程的关系)
 - [参考资料与致谢](#参考资料与致谢)
 - [许可证](#许可证)
@@ -94,6 +95,7 @@
 - **LED1 同时被闪烁、串口命令、温度联动、云端命令四处惦记，它们怎么不打架？**
 - **为什么"一键断 LED 链"在接了 DHT11 之后就不成立了？**
 - **为什么只关 `APP_MQTT_ENABLE` 时 FLASH 能省下来、RAM 却省不掉那 776 B？**
+- **为什么 IWDG 一旦启动就停不下来？复位原因为什么必须"先读后清"？喂狗周期为什么要留足余量？**
 
 ---
 
@@ -113,8 +115,9 @@
 | 微秒时基 | **TIM2**，APB1 定时器时钟 84 MHz → `Prescaler = 83` → **1 计数 = 1 µs**，只 `Base_Start` 不进中断 |
 | 系统时钟 | HSE 8 MHz → PLL（M=8 / N=336 / P=÷2）→ SYSCLK **168 MHz**，AHB 168 / APB1 42 / APB2 84 MHz |
 | HAL 时基 | **TIM6**（供 `HAL_Delay` 等使用） |
+| 看门狗 | **IWDG 独立看门狗**（片上外设，不占引脚）：LSI ≈32 kHz，分频 64 × 重载 1500 → **超时 3.0 s**；任务每 500 ms 喂一次；串口敲 `HANG` 可演示"卡死 → 整机复位" |
 | RTOS 节拍 | **SysTick**，`configTICK_RATE_HZ = 1000` → 1 tick = 1 ms |
-| RTOS | FreeRTOS 10.x + CMSIS-RTOS2（`osThreadNew` / `osDelay`），动态创建，堆 15360 B（四个任务栈 512+1024+768+2048） |
+| RTOS | FreeRTOS 10.x + CMSIS-RTOS2（`osThreadNew` / `osDelay`），动态创建，堆 32768 B（六个任务栈 512+1024+768+2048+2048+512） |
 | 中断优先级 | USART1 / USART3 / DMA1_Stream1 抢占优先级均为 **5**（与 `configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY` 相等，本工程统一纪律：ISR 内不调 RTOS API） |
 | 调试口 | SWD（ST-Link / J-Link 均可） |
 
@@ -154,13 +157,13 @@ build/Debug/IOT_M4_L4.elf   可执行文件（调试用）
 build/Debug/IOT_M4_L4.hex   Intel HEX（烧录用）
 ```
 
-预期输出（本次实测，**58 个构建目标，0 warning / 0 error**）：
+预期输出（本次实测，**74 个构建目标，0 warning / 0 error**）：
 
 ```text
 Memory region         Used Size  Region Size  %age Used
-             RAM:       41968 B       128 KB     32.02%
+             RAM:       42216 B       128 KB     32.21%
           CCMRAM:           0 B        64 KB      0.00%
-           FLASH:       46532 B       512 KB      8.88%
+           FLASH:       73520 B       512 KB     14.02%
 ```
 
 ### 2. 烧录
@@ -182,12 +185,21 @@ STM32_Programmer_CLI -c port=SWD -w build/Debug/IOT_M4_L4.hex -v -rst
 ```text
 ① 上电瞬间：LED1 快闪 3 次          ← 串口任务已启动的自检信号（旧固件没有这段）
 ② 之后：LED1 以 1 Hz 稳定闪烁        ← 亮 500ms / 灭 500ms
-③ 串口助手收到开机横幅：
+③ 串口助手收到开机横幅（15 行命令表）：
      === UART1 LED Control (4-Layer) ===
      Commands (end with Enter, case-insensitive):
        LED1 ON / LED1 OFF   LED1(PG14) on/off
        BLINK                blink 1Hz (half period from cfg)
        STATUS               query real LED state
+       TH <t> <h>           set temp/humi thresholds, save to EEPROM
+       ISCAN                scan I2C addr 0x50..0x57 (who is on the bus)
+       PINFO                re-detect EEPROM: model / page / size
+       PDUMP [len]          dump EEPROM raw bytes from 0x0000
+       PARAM                parse the 20B config block (magic/ver/crc)
+       FID                  read SPI Flash JEDEC ID + model name
+       FDUMP [addr] [len]   dump Flash raw bytes (addr supports 0x)
+       LOG [n]              read log record n (0 = newest)
+       HANG                 simulate a hang: stop feeding IWDG, reset in ~3s
        HELP                 show this help
      >
 ④ 紧接着 DHT11 的三行上电信息：
@@ -205,6 +217,10 @@ STM32_Programmer_CLI -c port=SWD -w build/Debug/IOT_M4_L4.hex -v -rst
      [MQTT] sending MQTT CONNECT ...  →  [MQTT] MQTT connected (keepalive=30s)
      [MQTT] subscribed: $oc/devices/<id>/sys/commands/#
      [MQTT] Published: {"services":[{"service_id":"Sensor","properties":{"temperature":28.0,"humidity":55.0}}]
+⑧ 看门狗任务最后起跑，先打两行启动信息，之后每 2 秒一行 Alive：
+     [WDT] boot: last reset = power-on/others
+     [WDT] IWDG started, timeout=3000ms, feed every 500ms (type HANG to simulate hang)
+     [WDT] Alive, feed=4
 ```
 
 > 上云是**可选**的：`APP_MQTT_WIFI_SSID` 等 8 个宏在 `user/app/Inc/app_mqtt.h` 顶部，
@@ -215,7 +231,9 @@ STM32_Programmer_CLI -c port=SWD -w build/Debug/IOT_M4_L4.hex -v -rst
 - **手指捏住 DHT11**（或对它哈气）→ 温度升到 ≥31 ℃ 时 **LED1 亮**；
 - **隔着 5 cm 对传感器哈气** → 湿度升到 ≥60 % 时 **LED2 亮**；
 - **拔掉 DATA 线** → 每 2 秒报 `Read FAILED (stage=1)`，且**两颗灯保持不乱动**；
-- **在华为云控制台下发 `LED_Control {led:1}`** → 板上 LED1 亮，串口吐 `[MQTT-CMD] LED_Control led=1` + `[MQTT-CMD] response sent`。
+- **在华为云控制台下发 `LED_Control {led:1}`** → 板上 LED1 亮，串口吐 `[MQTT-CMD] LED_Control led=1` + `[MQTT-CMD] response sent`；
+- **串口敲 `HANG` 回车** → 打 `[WDT] HANG cmd: stop feeding, reset in ~3s...`，约 3 秒后整机复位、LED 快闪自检重来，
+  这次启动行变成 `[WDT] boot: last reset = IWDG watchdog`——"被狗咬醒"的证据。
 
 灯不亮、串口没反应、或 DHT11 读不到，先按[常见问题](#常见问题)排查。
 
@@ -229,6 +247,7 @@ STM32_Programmer_CLI -c port=SWD -w build/Debug/IOT_M4_L4.hex -v -rst
 | `LED1 OFF` | 熄灭 LED1（并让它退出闪烁） | `OK: LED1 OFF` |
 | `BLINK` | 恢复 1 Hz 闪烁（半周期取自 cfg） | `OK: BLINK` |
 | `STATUS` | 查询 LED1 真实电平 | `LED1=ON` / `LED1=OFF` |
+| `HANG` | 卡死演示：看门狗任务罢工，约 3 s 后 IWDG 复位整机（2.4 新增） | `[WDT] HANG cmd: stop feeding, reset in ~3s...` |
 | `HELP` | 打印命令表 | 见上 |
 | 其它 | 未知命令原样回显在方括号里 | `ERR: unknown cmd [XXX]` |
 
@@ -243,26 +262,30 @@ STM32_Programmer_CLI -c port=SWD -w build/Debug/IOT_M4_L4.hex -v -rst
 
 ```text
 IOT_M4_L4/
-├── user/                       ★ 用户代码：四层架构（50 文件 / 9730 行）
+├── user/                       ★ 用户代码：四层架构（54 文件 / 10616 行）
 │   ├── app/Inc, Src/           ① 应用层    app_led（闪烁业务）/ app_blink（状态机）
 │   │                                      app_cmd（命令解析）/ app_task（任务创建）
 │   │                                      app_dht11（周期采集）/ app_link（阈值联动）
 │   │                                      app_mqtt（连接分段 / 周期上报 / 命令响应）
+│   │                                      app_param + app_logger（配置块 / 环形日志，2.3）
+│   │                                      app_watchdog（喂狗任务 + HANG 演示，2.4）
 │   ├── platform/Inc, Src/      ② 平台层    mod_uart1（串口1 统一入口：MOD_UART1_*）
 │   │                                      mod_mqtt（四种报文 + 剩余长度编码 + 报文 ID 会话）
 │   │                                      mod_wifi（连 AP / 建 TCP 的语义动作，AT 到此为止）
+│   │                                      mod_eeprom（AT24C02 器件语义）/ mod_flash（W25Q64 指令集，2.3）
 │   ├── network/Inc, Src/       ③ 网络层    net_uart（DMA 循环 + IDLE 判帧 + 环形缓冲，★ 实例表管 2 个串口）
 │   │                                      net_esp8266（AT 文本会话 + +IPD 二进制分流）
+│   │                                      net_i2c（I2C1 总线 + 九时钟自救）/ net_spi（SPI1 片选包络，2.3）
 │   ├── perception/Inc, Src/    ④ 感知层    per_led（门卫）/ per_gpio（s_led_hw[] 表 + 唯一碰 HAL）
 │   │                                      per_delay（TIM2 微秒）/ per_dht11（单总线协议翻译）
-│   │                                      ★ 上云章节本层零新增（UART 引脚在 CubeMX 配，AT 属文本帧处理）
+│   │                                      per_iwdg（IWDG 看门狗 + RCC 复位标志，2.4：片上外设不占引脚）
 │   │
-│   ├── cfg/                    ※ 横切·配置（纯头文件，无 .c；5 文件 / 750 行）
+│   ├── cfg/                    ※ 横切·配置（纯头文件，无 .c；5 文件 / 1029 行）
 │   │   ├── module_cfg.h            ◆ 总入口：全工程唯一配置入口，只做按序包含
-│   │   ├── cfg_switch.h            两级开关 22 个 + 九个裁剪场景说明
+│   │   ├── cfg_switch.h            两级开关 32 个 + 十个裁剪场景说明
 │   │   ├── cfg_print.h             打印开关（业务回复直出，总闸保持 0）
-│   │   ├── cfg_param.h             参数 32 个：节拍/半周期/串口与上云缓冲/任务栈/优先级/阈值
-│   │   └── cfg_check.h             依赖校验 18 条 + 参数体检 21 条（共 39 道 #error）
+│   │   ├── cfg_param.h             参数 66 个：节拍/半周期/串口与上云缓冲/存储/看门狗/任务栈/优先级/阈值
+│   │   └── cfg_check.h             依赖校验 27 条 + 参数体检 33 条（共 60 道 #error）
 │   └── common/                 ※ 横切·工具（3 文件 / 127 行）
 │       ├── ringbuf.h / ringbuf.c       无锁环形缓冲（ISR 写 / 任务读，容量 256）
 │       └── log.h                       日志级别（配合 CFG_LOG_LEVEL）
@@ -274,9 +297,9 @@ IOT_M4_L4/
 │   ├── Src/tim.c                   ★ DHT11 章节：TIM2 的 PSC 改 83 + 启动
 │   ├── Src/gpio.c                  PG9(DHT11) / PG13(LED2) / PG14(LED1) 三引脚合并配置
 │   ├── Src/main.c                  时钟、外设、GPIO；三章共新增 3 行 MX 调用
-│   └── Inc/stm32f4xx_hal_conf.h    串口章节打开 HAL_UART_MODULE_ENABLED
+│   └── Inc/stm32f4xx_hal_conf.h    串口章节打开 HAL_UART_MODULE_ENABLED；看门狗章节打开 HAL_IWDG_MODULE_ENABLED
 │
-├── Drivers/                    STM32F4 HAL 库 + CMSIS（串口章节补入 stm32f4xx_hal_uart.c/.h）
+├── Drivers/                    STM32F4 HAL 库 + CMSIS（串口章节补入 stm32f4xx_hal_uart.c/.h；看门狗章节补入 stm32f4xx_hal_iwdg.c/.h）
 ├── Middlewares/                FreeRTOS 内核（CubeMX 生成，未改动）
 ├── cmake/stm32cubemx/          CubeMX 生成的 CMake 目标（登记 usart.c / dma.c / hal_uart.c）
 │
@@ -284,10 +307,10 @@ IOT_M4_L4/
 │   ├── README.md                   文档索引与按角色的阅读路径
 │   ├── architecture/               四层架构解析（最简 LED 版 / 串口控灯版 / DHT11 版 / 上云版）
 │   ├── software-engineering/       配置体系与两级开关 / 串口三件套 / 闪烁状态机与契约式注释
-│   ├── tutorials/                  t01 四层 LED、t02 接串口、t03 接 DHT11、t04 接 WiFi-MQTT 上云
+│   ├── tutorials/                  t01 四层 LED、t02 接串口、t03 接 DHT11、t04 接 WiFi-MQTT 上云、t05 接 IWDG 看门狗
 │   ├── reference/                  引脚与符号速查表
-│   ├── test/                       LED 链 / 串口链 / 上板操作卡 / DHT11 链 / 上云链
-│   ├── teaching/                  配套课件 pptx（本工程对应 1.3 + 1.4 + 2.2）
+│   ├── test/                       LED 链 / 串口链 / 上板操作卡 / DHT11 链 / 上云链 / 看门狗链
+│   ├── teaching/                  配套课件 pptx（本工程对应 1.3 + 1.4 + 2.2 + 2.4）
 │   ├── build_docs.py              Markdown → HTML 渲染器
 │   ├── check_stats.py             规模数字对账
 │   └── _tools/                     取数脚本：体积 / 链接产物 / 函数计数
@@ -330,7 +353,11 @@ IOT_M4_L4/
 | **心跳间隔** | `APP_MQTT_KEEPALIVE_SEC`（s，≥10） | `cfg_param.h` | `30` |
 | 离线缓存条数 | `APP_MQTT_OFFLINE_CACHE_MAX` | `cfg_param.h` | `16`（× 5 s ≈ 80 秒窗口） |
 | 上云任务栈 | `APP_MQTT_TASK_STACK_SIZE`（**字节**） | `cfg_param.h` | `2048` |
+| **看门狗超时** | `PER_IWDG_DIV` / `PER_IWDG_RELOAD`（两数相乘除 32 = 毫秒） | `cfg_param.h` | `64` / `1500` → 3.0 s |
+| 喂狗周期 | `APP_WDT_FEED_PERIOD_MS`（必须 ≪ 超时，闸门守 ×2 底线） | `cfg_param.h` | `500` |
+| 看门狗任务栈 | `APP_WDT_TASK_STACK_SIZE`（**字节**） | `cfg_param.h` | `512` |
 | 整条上云链砍掉 | `MOD_WIFI_ENABLE` 改 0 | `cfg_switch.h` | `1` |
+| 整条看门狗链砍掉 | `MOD_WDG_ENABLE` 改 0（省 1368 B FLASH / 16 B RAM，实测） | `cfg_switch.h` | `1` |
 | 整条 DHT11 链砍掉 | `MOD_DHT11_ENABLE` 改 0 | `cfg_switch.h` | `1` |
 | **只要温湿度读数、不要联动** | `APP_LINK_ENABLE` 末尾 1 改 0 | `cfg_switch.h` | `(MOD_DHT11_ENABLE && 1)` |
 | 整条串口链砍掉 | `MOD_UART1_ENABLE` 改 0（**必须连带处理 DHT11 链**） | `cfg_switch.h` | `1` |
@@ -342,8 +369,8 @@ IOT_M4_L4/
 > ⚠️ **六个容易踩的坑**
 > 1. `*_TASK_STACK_SIZE` 的单位是**字节**，不是"字"。填 256 以为省 RAM，实际只分到 256 字节 → 栈溢出会**静默写坏 FreeRTOS 堆**（不报错、不进 HardFault），现象是"跑几行后整机没反应"。
 > 2. **"一键断 LED 链"在本工程已不成立**：`MOD_LED_ENABLE` 改 0 会同时撞上 `APP_UART1 requires APP_BLINK` 与 `APP_LINK requires PER_LED` 两条闸门——串口命令、DHT11 联动、云端命令都要借 LED 链点灯。想让灯不自动闪，应关 `APP_LED_ENABLE`（保留状态机），让串口/云端接管。
-> 3. **关串口链要连带处理 DHT11 链与上云链**：两者都要用串口打印，否则撞 `APP_DHT11 requires MOD_UART1` / `NET_UART3 requires HAL_UART_MODULE`。
-> 4. **关到"没任务可建"会被拦**：四个任务对应的开关都关、而 `APP_TASK_ENABLE` 仍为 1 → `#error`。
+> 3. **关串口链要连带处理 DHT11 链、上云链、存储两条链与看门狗链**：它们都要借串口打印，否则撞 `APP_DHT11 requires MOD_UART1` / `NET_UART3 requires HAL_UART_MODULE` / `APP_WATCHDOG requires MOD_UART1` / `storage chain requires MOD_UART1`。反过来**关 DHT11 链不用手动补别的**——日志应用层已由开关表达式自动跟关。
+> 4. **关到"没任务可建"会被拦**：六个任务对应的开关都关、而 `APP_TASK_ENABLE` 仍为 1 → `#error`。
 > 5. **只关 `APP_MQTT_ENABLE` 省不下那 776 B RAM**：UART3 的 DMA 缓冲（512 B）与环形缓冲（268 B）被 `net_uart` 的实例表项钉住，`--gc-sections` 不敢动。想真省 RAM 必须关总闸 `MOD_WIFI_ENABLE`。
 > 6. **物模型对不上 = 静默丢弃**：`service_id` 或属性名与控制台"功能定义"不一致时，华为云**丢弃且不报错**——设备在线、串口打印 `Published`、云端"最新数据"永远空。
 
@@ -355,10 +382,10 @@ IOT_M4_L4/
 
 | 层 | 目录 | 文件 | 职责 | 关键符号 |
 |---|---|---|---|---|
-| ① app | `user/app/` | `app_led.c` / `app_blink.c` / `app_cmd.c` / `app_dht11.c` / `app_link.c` / `app_mqtt.c` / `app_task.c` | 业务："闪多快"；闪烁状态机；"一行命令 → 一个动作"；"读到的数意味着什么"；"报什么、多久报、命令怎么响应"；任务集中创建 | `app_led_init` / `APP_BLINK_process` / `APP_BLINK_On|Off|IsOn` / `app_cmd_task` / `app_dht11_task` / `APP_LINK_ApplyTemp|ApplyHum` / `app_mqtt_task` / `app_taskCreate` |
-| ② platform | `user/platform/` | `mod_uart1.c` / `mod_wifi.c` / `mod_mqtt.c` | 统一入口与协议位：串口的收/发名字；"连 AP / 建 TCP"的五个语义动作；MQTT 四种报文与剩余长度编码 | `MOD_UART1_Init` / `MOD_WIFI_JoinAp` / `MOD_WIFI_OpenTcp` / `MOD_MQTT_Connect` / `MOD_MQTT_Publish` / `MOD_MQTT_Poll` |
-| ③ network | `user/network/` | `net_uart.c` / `net_esp8266.c` | 字节流：DMA 循环接收 + IDLE 判帧 + 环形缓冲（**实例表管 USART1 与 USART3**）；AT 文本会话 + `+IPD` 二进制分流 | `net_uart_init(id)` / `net_uart_rx_idle_handler(id)` / `net_esp8266_join_ap` / `net_esp8266_send` / `net_esp8266_recv` |
-| ④ perception | `user/perception/` | `per_led.c` / `per_gpio.c` / `per_delay.c` / `per_dht11.c` | 门卫（编号→动作）+ 硬件描述表 `s_led_hw[]` + GPIO 读写 + 微秒时基 + 单总线协议翻译（**上云章节零新增**） | `PER_LED_On|Off|IsOn|Toggle` / `per_gpio_write` / `per_gpio_is_on` / `per_delay_us` / `PER_DHT11_Read` |
+| ① app | `user/app/` | `app_led.c` / `app_blink.c` / `app_cmd.c` / `app_dht11.c` / `app_link.c` / `app_mqtt.c` / `app_param.c` / `app_logger.c` / `app_watchdog.c` / `app_task.c` | 业务："闪多快"；闪烁状态机；"一行命令 → 一个动作"；"读到的数意味着什么"；"报什么、多久报、命令怎么响应"；配置块与环形日志；"按时喂狗"；任务集中创建 | `app_led_init` / `APP_BLINK_process` / `APP_BLINK_On|Off|IsOn` / `app_cmd_task` / `app_dht11_task` / `APP_LINK_ApplyTemp|ApplyHum` / `app_mqtt_task` / `app_storage_task` / `app_watchdog_task` / `APP_WATCHDOG_HangDemo` / `app_taskCreate` |
+| ② platform | `user/platform/` | `mod_uart1.c` / `mod_wifi.c` / `mod_mqtt.c` / `mod_eeprom.c` / `mod_flash.c` | 统一入口与协议位：串口的收/发名字；"连 AP / 建 TCP"的五个语义动作；MQTT 四种报文与剩余长度编码；AT24C02 页写与 W25Q64 指令集的器件语义 | `MOD_UART1_Init` / `MOD_WIFI_JoinAp` / `MOD_WIFI_OpenTcp` / `MOD_MQTT_Connect` / `MOD_MQTT_Publish` / `MOD_MQTT_Poll` / `MOD_EEPROM_Write` / `MOD_FLASH_Read` |
+| ③ network | `user/network/` | `net_uart.c` / `net_esp8266.c` / `net_i2c.c` / `net_spi.c` | 字节流：DMA 循环接收 + IDLE 判帧 + 环形缓冲（**实例表管 USART1 与 USART3**）；AT 文本会话 + `+IPD` 二进制分流；I2C1 / SPI1 两条总线 | `net_uart_init(id)` / `net_uart_rx_idle_handler(id)` / `net_esp8266_join_ap` / `net_esp8266_send` / `net_esp8266_recv` / `net_i2c_write` / `net_spi_transfer` |
+| ④ perception | `user/perception/` | `per_led.c` / `per_gpio.c` / `per_delay.c` / `per_dht11.c` / `per_iwdg.c` | 门卫（编号→动作）+ 硬件描述表 `s_led_hw[]` + GPIO 读写 + 微秒时基 + 单总线协议翻译 + IWDG 看门狗与 RCC 复位标志 | `PER_LED_On|Off|IsOn|Toggle` / `per_gpio_write` / `per_gpio_is_on` / `per_delay_us` / `PER_DHT11_Read` / `PER_IWDG_Init` / `PER_IWDG_Feed` |
 | ※ cfg | `user/cfg/` | `module_cfg.h` + 4 子文件 | 配置：开关与参数；编译期校验（只被读，不被调） | `MOD_LED_ENABLE` / `MOD_WIFI_ENABLE` / `APP_LINK_TEMP_THRESHOLD` / `APP_MQTT_PUBLISH_PERIOD_MS` … |
 | ※ common | `user/common/` | `ringbuf.*` / `log.h` | 横切工具：不占层、不依赖任何层 | `rb_init` / `rb_write` / `rb_read` |
 
@@ -379,7 +406,7 @@ IOT_M4_L4/
 每层有**自己独立的 LED 编号枚举**（`APP_BLINK_LED_t` / `PER_LED_t` / `PER_GPIO_LED_t`），末位都是哨兵量 `XXX_LED_COUNT`——既作数组长度，也作越界判断。
 注意三套的 COUNT **并不相同**：感知层两套 = **2**（管 LED1 与 LED2），`APP_BLINK_LED_t` = **1**（LED2 不归闪烁状态机管，它只被湿度联动直接控制）。
 
-### 四条链，两个合流点
+### 七条链，两个合流点
 
 ```text
 LED 链（两跳）    app_led   → APP_BLINK_*  → PER_LED_* → per_gpio_* → HAL
@@ -387,6 +414,9 @@ LED 链（两跳）    app_led   → APP_BLINK_*  → PER_LED_* → per_gpio_* �
 DHT11 链（两跳）  app_dht11 → PER_DHT11_*  → per_delay_* → HAL
 上云链（五跳）    app_mqtt  → MOD_MQTT_*   → MOD_WIFI_*
                             → net_esp8266_* → net_uart(NET_UART_WIFI, USART3) → HAL
+参数链（三跳）    app_param → mod_eeprom   → net_i2c(I2C1) → HAL          【2.3】
+日志链（三跳）    app_logger→ mod_flash    → net_spi(SPI1) → HAL          【2.3】
+看门狗链（两跳）  app_watchdog → per_iwdg  → HAL（IWDG 片上外设，不占引脚）【2.4】
 
   ★ 合流点① APP_BLINK_*（同在 app 层）
      串口命令与自动闪烁在此汇合：命令先让灯"退出闪烁"再点灯 —— 手动与闪烁绝不抢同一颗灯。
@@ -401,7 +431,11 @@ DHT11 链（两跳）  app_dht11 → PER_DHT11_*  → per_delay_* → HAL
              DHT11 链 → 串口链（借 MOD_UART1_* 打印）
              上云链  → LED 链（借 APP_BLINK/PER_LED 点灯）
              上云链  → DHT11 链（只读快照 APP_DHT11_GetSnapshot，可选）
-    所以 LED 链是四条里最底的一条 —— "一键断 LED 链"在本工程已不成立。
+             参数链  → 串口链（借 MOD_UART1_* 打印）；DHT11 链 → 参数链（阈值运行时读配置块）
+             日志链  → 串口链（借 MOD_UART1_* 打印）
+             看门狗链 → 串口链（借 MOD_UART1_* 打印启动行与 Alive）
+             串口链   → 看门狗链（HANG 命令置罢工标志，应用层内合流）
+    所以 LED 链是七条里最底的一条 —— "一键断 LED 链"在本工程已不成立。
 ```
 
 > **为什么上云链要五跳？** 因为它有四种**互不重叠的知识**，任何一种都不能塞进别处：
@@ -450,7 +484,7 @@ PC 发 "LED1 ON\n"
  → MOD_WIFI_Send → net_esp8266_send → AT+CIPSEND → net_uart_send(NET_UART_WIFI) → HAL_UART_Transmit
 ```
 
-### 启动流程（从复位到四条链都跑起来）
+### 启动流程（从复位到七条链都跑起来）
 
 ```text
 复位 → startup_stm32f407xx.s → main()
@@ -462,24 +496,26 @@ PC 发 "LED1 ON\n"
             ├─ osThreadNew(app_led_task,   …)   灯：初始化引脚 + 设 1Hz
             ├─ osThreadNew(app_cmd_task,   …)   串口：拉起 DMA 接收 + 快闪 3 次自检
             ├─ osThreadNew(app_dht11_task, …)   传感器：自检 → 稳定 1s → 每 2s 采集
-            └─ osThreadNew(app_storage_task,…) 存储：EEPROM 读回 3s + W25Q64 日志 5s
-  → osKernelStart()  →  调度器接管  →  五个任务各自跑起来
+            ├─ osThreadNew(app_mqtt_task,  …)   上云：六段连接 → 每 5s 上报
+            ├─ osThreadNew(app_storage_task,…) 存储：EEPROM 读回 3s + W25Q64 日志 5s
+            └─ osThreadNew(app_watchdog_task,…) 看门狗：读复位原因 → 清标志 → 启动 IWDG → 500ms 喂狗
+  → osKernelStart()  →  调度器接管  →  六个任务各自跑起来
 ```
 
 ---
 
-## 用户代码清单（50 个文件 / 9730 行）
+## 用户代码清单（54 个文件 / 10616 行）
 
 > 行数含契约式注释；去掉注释后的代码量约为其三分之一。
 > 口径：`user/` 下除 `common/` 外的 .c/.h，由 `docs/check_stats.py` 逐行核对。
 
 | 层 | 文件 | 行数 | 说明 |
 |---|---|---|---|
-| ※ cfg | `module_cfg.h` | 73 | 总入口，只做按序包含 + 六条链的链路表 |
-| ※ cfg | `cfg_switch.h` | 219 | 两级开关（28 个）+ 九个裁剪场景说明 |
+| ※ cfg | `module_cfg.h` | 78 | 总入口，只做按序包含 + 七条链的链路表 |
+| ※ cfg | `cfg_switch.h` | 263 | 两级开关（32 个）+ 十个裁剪场景说明 |
 | ※ cfg | `cfg_print.h` | 48 | 打印总闸（业务回复直出，保持 0） |
-| ※ cfg | `cfg_param.h` | 232 | 59 个参数 + 栈单位与缓冲大小说明 |
-| ※ cfg | `cfg_check.h` | 347 | 24 条依赖校验 + 27 条参数体检 |
+| ※ cfg | `cfg_param.h` | 261 | 66 个参数 + 栈单位与缓冲大小说明 |
+| ※ cfg | `cfg_check.h` | 412 | 27 条依赖校验 + 33 条参数体检 |
 | ④ perception | `Inc/per_gpio.h` | 108 | 接口契约：枚举（2 颗灯）+ 四个动作声明 |
 | ④ perception | `Src/per_gpio.c` | 178 | `s_led_hw[]` 表（2 项）+ init / write / is_on / toggle |
 | ④ perception | `Inc/per_led.h` | 111 | 接口契约（门卫，2 颗灯） |
@@ -488,6 +524,8 @@ PC 发 "LED1 ON\n"
 | ④ perception | `Src/per_delay.c` | 77 | 读 TIM2 计数器 + 无符号减法处理回绕 |
 | ④ perception | `Inc/per_dht11.h` | 157 | DHT11 接口 + `Status` / `Data` / `FailStage` / `Diag` |
 | ④ perception | `Src/per_dht11.c` | 353 | 单总线时序 + 切方向 + 关中断 + 自检 |
+| ④ perception | `Inc/per_iwdg.h` | 100 | IWDG 接口 + "先读后清"契约 + 超时公式说明 |
+| ④ perception | `Src/per_iwdg.c` | 102 | KR 钥匙 + 分频映射表 + 调试冻结 + RCC 复位标志 |
 | ③ network | `Inc/net_uart.h` | 151 | 接口契约（串口三件套 + `NET_UART_Id_t` 实例编号） |
 | ③ network | `Src/net_uart.c` | 302 | 实例表（2 项）+ DMA 循环 + IDLE 判帧 + ringbuf + 错误自愈 |
 | ③ network | `Inc/net_esp8266.h` | 202 | AT 会话接口（12 个）+ 返回码 + 超时表说明 |
@@ -511,21 +549,23 @@ PC 发 "LED1 ON\n"
 | ① app | `Inc/app_led.h` | 53 | 接口契约 |
 | ① app | `Src/app_led.c` | 96 | 闪烁业务 |
 | ① app | `Inc/app_cmd.h` | 50 | 接口契约（串口命令） |
-| ① app | `Src/app_cmd.c` | 756 | 命令解析 + 回显 + 自检快闪 + **TH 命令写 EEPROM** |
+| ① app | `Src/app_cmd.c` | 770 | 命令解析 + 回显 + 自检快闪 + **TH 命令写 EEPROM** + **HANG 卡死演示** |
 | ① app | `Inc/app_dht11.h` | 78 | DHT11 采集任务接口 + `APP_DHT11_Snapshot_t`（快照） |
 | ① app | `Src/app_dht11.c` | 293 | 周期读 + 重试 + 写快照 + 自己拼串输出（不引 printf） |
 | ① app | `Inc/app_link.h` | 71 | 阈值联动接口（温度→LED1、湿度→LED2） |
 | ① app | `Src/app_link.c` | 146 | 边沿触发 + **阈值运行时读配置块（回落宏值）** |
-| ① app | `Inc/app_mqtt.h` | 92 | 上云接口 + 8 个用户配置宏（`__has_include` 探测密钥头） |
-| ① app | `Src/app_mqtt.c` | 710 | 六段连接 + 退避重连 + 周期上报 + 离线缓存 + 命令响应 |
+| ① app | `Inc/app_mqtt.h` | 99 | 上云接口 + 8 个用户配置宏（`__has_include` 探测密钥头） |
+| ① app | `Src/app_mqtt.c` | 977 | 六段连接 + 退避重连 + 周期上报 + 离线缓存 + 命令响应 |
 | ① app | `Inc/app_param.h` | 112 | 20 字节配置块（pack(1)+static_assert）+ 存储任务接口 |
-| ① app | `Src/app_param.c` | 458 | 加载五步 + CRC16-CCITT + 读回任务 + 阈值读写 |
+| ① app | `Src/app_param.c` | 463 | 加载五步 + CRC16-CCITT + 读回任务 + 阈值读写 |
 | ① app | `Inc/app_logger.h` | 81 | 8 字节环形日志记录 + 分区常量 |
-| ① app | `Src/app_logger.c` | 335 | 扫描找空位断电续写 + 写满擦最旧 + 读 0 即最新 |
+| ① app | `Src/app_logger.c` | 355 | 扫描找空位断电续写 + 写满擦最旧 + 读 0 即最新 |
 | ① app | `Inc/app_mqtt_secret.h` | 26 | 本机密钥（git 忽略；仓库内只有 `.template`） |
-| ① app | `Inc/app_task.h` | 52 | 接口契约（五个任务） |
-| ① app | `Src/app_task.c` | 222 | 五个任务集中创建（存储任务驱动两条链） |
-| — | **合计** | **9730** | |
+| ① app | `Inc/app_watchdog.h` | 57 | 喂狗任务接口 + HANG 演示契约（2.4 新增） |
+| ① app | `Src/app_watchdog.c` | 130 | 先读后清 → 启动 IWDG → 500 ms 喂狗 + HANG 罢工死循环 |
+| ① app | `Inc/app_task.h` | 57 | 接口契约（六个任务） |
+| ① app | `Src/app_task.c` | 258 | 六个任务集中创建（存储任务驱动两条链，看门狗最后起跑） |
+| — | **合计** | **10616** | |
 
 另有：
 
@@ -533,9 +573,10 @@ PC 发 "LED1 ON\n"
 - **8 个 `.gitkeep`**：四层的 `Inc/` 与 `Src/` 各一个；
 - **Core 挂载点与 MX 改动**：见下节。
 
-> 四章的规模演进：**15 文件 / 1091 行**（纯闪烁）→ **21 文件 / 2267 行**（加串口）
+> 五章的规模演进：**15 文件 / 1091 行**（纯闪烁）→ **21 文件 / 2267 行**（加串口）
 > → **29 文件 / 3677 行**（加 DHT11）→ **37 文件 / 6639 行**（加上云）
-> → **50 文件 / 9730 行**（加外部存储器）；横切 common 三段始终 127 行未变。
+> → **50 文件 / 9730 行**（加外部存储器）→ **54 文件 / 10616 行**（加 IWDG 看门狗）；
+> 横切 common 三段始终 127 行未变。
 >
 > 2.3 存储章节的 12 个新文件（2146 行）分别是：
 > `net_i2c.h/.c`（84/213）、`net_spi.h/.c`（43/53）、`mod_eeprom.h/.c`（63/114）、`mod_flash.h/.c`（109/294）、
@@ -543,6 +584,11 @@ PC 发 "LED1 ON\n"
 > 另有 `app_mqtt_secret.h`（26，2.2 章节的凭证分离产物，git 忽略）。
 > 扩写的既有文件：`app_cmd.c` +93（TH 命令）、`app_link.c` +33（运行时阈值）、`app_task.c` +28（第五个任务）、
 > cfg 四件 +212（六开关 / 20 参数 / 12 闸门 / 链路表）、`app_mqtt.h` +14、`module_cfg.h` +7。
+>
+> 2.4 看门狗章节的 4 个新文件（389 行）分别是：`per_iwdg.h/.c`（100/102）、`app_watchdog.h/.c`（57/130）。
+> 扩写的既有文件：cfg 三件 +122（四开关 / 7 参数 / 9 闸门 / 场景⑩）、`module_cfg.h` +2（链路表加看门狗链）、
+> `app_cmd.c` +14（HANG 命令）、`app_task.h/.c` +5/+36（第六个任务）。
+> 另对账修正 2.3 既有欠账 `app_mqtt.h/.c` +7/+267（上一提交改了代码未同步文档，本次按磁盘实测补齐）。
 
 ---
 
@@ -602,12 +648,12 @@ MX 生成文件里的调用点不受本工程开关控制，所以被它们调�
 > 判断标准：**只要调用点在 MX 生成文件里，被调用的函数就必须永远存在。**
 > 否则"关开关"会变成 undefined reference——而关开关本该只是配置操作，不该炸链接。
 
-### 5. 编译期闸门：40 道
+### 5. 编译期闸门：61 道
 
 | 位置 | 数量 | 拦什么 |
 |---|---|---|
-| `cfg_check.h` · 依赖校验 | 18 | 悬挂配置（如 APP_UART1 开而 APP_BLINK 关）、串口链三层断档、DHT11 两层断档、**上云链五跳断档（5 条串成一条链）**、**跨链借用（APP_LINK → PER_LED）、三条链都关而 APP_TASK 仍开** |
-| `cfg_check.h` · 参数体检 | 21 | 节拍 ≥1、半周期是节拍整数倍且 ≥2×节拍、四个任务栈 ≥512 字节、四个优先级 1~55、行缓冲 ≥8、DHT11 周期 ≥1000 ms、重试耗时 ≤ 半个周期、湿度阈值 20..90、**上报周期 ≥1000 ms、keepalive ≥10 s、MQTT 发送缓冲 ≥256 B、命令主题缓冲 ≥108 B** |
+| `cfg_check.h` · 依赖校验 | 27 | 悬挂配置（如 APP_UART1 开而 APP_BLINK 关）、串口链三层断档、DHT11 两层断档、**上云链五跳断档（5 条串成一条链）**、**跨链借用（APP_LINK → PER_LED）、任务都关而 APP_TASK 仍开**、**看门狗链三跳断档（APP_WATCHDOG → PER_IWDG → HAL_IWDG + 借串口打印）** |
+| `cfg_check.h` · 参数体检 | 33 | 节拍 ≥1、半周期是节拍整数倍且 ≥2×节拍、六个任务栈 ≥512 字节、六个优先级 1~55、行缓冲 ≥8、DHT11 周期 ≥1000 ms、重试耗时 ≤ 半个周期、湿度阈值 20..90、**上报周期 ≥1000 ms、keepalive ≥10 s、MQTT 发送缓冲 ≥256 B、命令主题缓冲 ≥108 B**、**IWDG 分频合法值（4~256 的 2 幂）、重载 1..4095、喂狗周期 ×2 ≤ 超时（余量闸门）** |
 | `cfg_print.h` · 打印链 | 1 | 打印总闸拨 1 却没有串口链 |
 
 最值得记住的两条：
@@ -783,71 +829,93 @@ if (snap.valid == 0U) { /* 还没采到过：如实说"没数据"，不编一个
 
 ## 资源占用
 
-以 `Debug` 预设、arm-none-eabi-gcc 14.3.1 实测（**58 个构建目标，0 warning / 0 error**）。
+以 `Debug` 预设、arm-none-eabi-gcc 14.3.1 实测（**74 个构建目标，0 warning / 0 error**）。
 每一档都是"删掉 `build/` 全量重建"取的数，脚本固化在 `docs/_tools/measure_scenarios.py`。
+
+> ⚠ **口径说明**：下表**全部为 2.4 实测**（2026-10-30 逐档 `rm -rf build/` 全量重建，
+> 17 档耗时约 40 分钟，脚本 `docs/_tools/measure_scenarios.py` 可复现）。
+> 2.2 时代的旧值（默认 46532 B / 41968 B）已整体作废——七条链加入后绝对值变了，只看本表。
 
 | 形态 | FLASH | RAM |
 |---|---|---|
-| **默认（四链全开）** | **46532 B** / 512 KB（8.88%） | **41968 B** / 128 KB（32.02%） |
-| A 关自动闪烁（`APP_LED=0`，串口控灯形态） | 46312 B（8.83%） | 41968 B（32.02%） |
-| B 裁联动（`APP_LINK=0`，纯采集器） | 46312 B（8.83%） | 41968 B（32.02%） |
-| C 关整条 DHT11 链（`MOD_DHT11=0`） | 43380 B（8.27%） | 41952 B（32.01%） |
-| D 只留 DHT11 感知层（`APP_DHT11`+`APP_LINK`=0） | 43380 B（8.27%） | 41952 B（32.01%） |
-| **E 关整条上云链（`MOD_WIFI=0`，= 1.4 功能集）** | **35164 B**（6.71%） | **38864 B**（29.65%） |
-| **F 只裁上云应用层（`APP_MQTT=0`）** | **35164 B**（6.71%） | **39640 B**（30.24%） |
-| G 再裁掉 MQTT 报文层（`+MOD_MQTT=0`） | 35164 B（6.71%） | 39640 B（30.24%） |
-| H 回退纯闪烁（再关 DHT11/上云/串口链 + `HAL_UART`） | 29680 B（5.66%） | 38312 B（29.23%） |
-| I 裸机骨架（四链全关 + `APP_TASK=0`） | 29268 B（5.58%） | 38304 B（29.22%） |
+| **默认（七链全开）** | **73520 B** / 512 KB（14.02%） | **42216 B** / 128 KB（32.21%） |
+| **N 裁看门狗链（`MOD_WDG=0`）** | **72152 B**（13.76%） | **42200 B**（32.20%） |
+| **O 只裁看门狗应用层（`APP_WATCHDOG=0`）** | **72152 B**（13.76%）——与砍整链完全相同（gc 验收单） | **42200 B**（32.20%） |
+| A 关自动闪烁（`APP_LED=0`，串口控灯形态） | 73300 B（13.98%） | 42216 B（32.21%） |
+| B 裁联动（`APP_LINK=0`，纯采集器） | 73128 B（13.95%） | 42216 B（32.21%） |
+| **E 关整条上云链（`MOD_WIFI=0`，= 1.4 + 存储 + 看门狗）** | **59652 B**（11.38%） | **39104 B**（29.83%） |
+| **F 只裁上云应用层（`APP_MQTT=0`）** | **59652 B**（11.38%） | **39880 B**（30.43%） |
+| G 再裁掉 MQTT 报文层（`+MOD_MQTT=0`） | 59652 B（11.38%） | 39880 B（30.43%） |
+| **C 关整条 DHT11 链（`MOD_DHT11=0`）** | **66164 B**（12.62%） | **42184 B**（32.18%） |
+| **D 只留 DHT11 感知层（`APP_DHT11`+`APP_LINK`=0）** | **66164 B**（12.62%）——与 C 完全相同（gc 验收单） | **42184 B**（32.18%） |
+| H 回退纯闪烁（七链只留 LED + `HAL_UART=0`） | 31132 B（5.94%） | 38480 B（29.36%） |
+| I 裸机骨架（七链全关 + `APP_TASK=0`） | 30712 B（30 KB，5.86%） | 38472 B（29.35%） |
+| J 只断 LED 链 / K 只断串口链 / L 只断 USART3 / M 关 HAL UART / Q 关 HAL IWDG | **预期报错**（闸门全部按设计触发，实测逐条命中） | — |
 
 五点值得知道：
 
 - **基准体积的用法**：只想改注释时，编译后体积**应当完全不变**——体积一变，说明动到了真实代码。
-- **上云链共 11368 B FLASH / 3104 B RAM**（46532 − 35164、41968 − 38864）。这是一整条 MQTT + AT + 第二个串口的价钱。
-- **E / F / G 三档 FLASH 完全相同（35164 B）**："关开关"真的能把 `app_mqtt` / `mod_mqtt` / `mod_wifi` / `net_esp8266` 全部 gc 掉，一行都不剩。
+- **上云链共 13868 B FLASH / 3112 B RAM**（73520 − 59652、42216 − 39104）。这是一整条 MQTT + AT + 第二个串口的价钱。
+- **E / F / G 三档 FLASH 完全相同（59652 B）**："关开关"真的能把 `app_mqtt` / `mod_mqtt` / `mod_wifi` / `net_esp8266` 全部 gc 掉，一行都不剩。
 - **但 F 的 RAM 比 E 多 776 B**：UART3 的 512 B DMA 缓冲 + 268 B 环形缓冲被 `net_uart` 的**实例表项钉住**了。
   这是"参数化"的代价——想真省 RAM 只能关总闸（E 档）。这条是本册最值得记住的实测结论。
-- **未用代码会被自动回收**："C 关整条 DHT11 链"与"D 只留 DHT11 感知层"**完全同体积**，
-  说明留下的 `per_delay` + `per_dht11` 被 `-Wl,--gc-sections` 100% 回收；
-  H 与 I 只差 412 B，那 412 B 全是 Core 层与 HAL 的固定开销。
+- **DHT11 链共 7356 B FLASH / 32 B RAM**（73520 − 66164、42216 − 42184），
+  且 **C 与 D 精确同体积**——又一次 `--gc-sections` 验收单：留下的 `per_delay` + `per_dht11` 被 100% 回收。
+- **关 DHT11 会连带关掉日志应用层**：`APP_LOGGER_ENABLE = (MOD_FLASH_ENABLE && APP_DHT11_ENABLE)`
+  （环形日志记的就是 DHT11 快照）。这是把跨链依赖**写进开关表达式**、而不是留给使用者去记：
+  一行 `MOD_DHT11=0` 就干净落地，不必再手动补 `NET_SPI_ENABLE=0`。参数链（EEPROM）不受影响，照常编入。
 
-> **cfg 的开关管不到 Core 层**：H / I 档的 29~30 KB 里仍含 CubeMX 生成的
+> **cfg 的开关管不到 Core 层**：全关档（H / I）的体积里仍含 CubeMX 生成的
 > `usart.c`（USART1 + **USART3**）/`dma.c`（DMA2_Stream2 + **DMA1_Stream1**）/`tim.c` 及它们拖进来的
 > `HAL_UART_Init`（已用 `nm` 验证）。所以本表**不能**与"纯闪烁工程 v2.1b（20836 B）"直接比——
 > 那个工程连 `usart.c` 都不存在。想省这部分得去 `.ioc` 里删外设重新生成。
 
 > ⚠ 改过 `cfg_switch.h` 后必须 `rm -rf build/` 全量重建再取数，否则 ninja 会直接复用旧 .elf。
 > 本工程的体积表就曾因此整体失真过。
-> 上表 10 档由 `docs/_tools/measure_scenarios.py` 逐个改开关 + 全量重建测出（2026-10-29 重跑复核）。
+> 上表各档由 `docs/_tools/measure_scenarios.py` 逐个改开关 + 全量重建测出（2026-10-30 重跑，共 17 档）。
 
 ---
 
 ## 文档
 
-全部为中文，正文在 `docs/` 下；每篇 `.md` 都有**同名单文件网页版**（样式内嵌、无外部依赖，可直接双击打开或打印成 PDF）。
+全部为中文，正文在 `docs/` 下；每篇 `.md` 都有**同名单文件网页版**（样式内嵌、无外部依赖，可直接双击打开或打印成 PDF），`build_docs.py` 共产出 22 个网页版（含本文件与 `docs/README.md`）。
+
+**下表仅用于索引**：它回答"有哪几篇文档、每篇讲什么"，**不承担现状口径的职责**；
+各篇正文各自按**写作那一年的口径**保留（见下方说明），工程当前的真实数字一律以 `cfg_*.h` 与速查表为准。
 
 > **说明**：`docs/` 为**私有子模块**（仓库 [iot_-m4_-l4-docs](https://gitee.com/catemo/iot_-m4_-l4-docs)，仅授权账号可见）。克隆本项目后需执行 `git submodule update --init docs` 拉取文档；未授权账号无法获取 docs 内容。
 
-| 分类 | 文档 | 内容 |
+> **⚠ 本表只做索引，不是现状口径**：表中每行描述的是**那一册文档写作时**的内容与数字，
+> 各篇正文也**按各自年份的口径保留**（1.3 写 16 道闸门、1.4 写七档体积 / 29 道、2.2 写四条链 / 十档 / 40 道），
+> 不做跨章回填——这样才能保住每篇当时推导的完整性。
+> **工程的现行口径只有一个**：54 个用户文件 / 10616 行、七条链、32 个开关 / 66 个参数 / 61 道闸门、
+> 六任务、17 档基准体积（73520 B / 42216 B），以 `cfg_*.h`、`docs/reference/引脚与符号速查表.md`（§7.1 / §7.2 / §八 / §九）
+> 与 `docs/check_stats.py + _tools/measure_scenarios.py` 的机器输出为准。
+
+| 分类 | 文档（仅索引） | 内容（写作口径，非现状） |
 |---|---|---|
 | 索引 | [`docs/README.md`](docs/README.md) | 分类导航 + 按角色的阅读路径 + 维护脚本清单 |
-| architecture | [四层架构解析 · WiFi-MQTT 上云](docs/architecture/四层架构解析-WiFi-MQTT上云-1.0.md) | **最新一册主文档**：四条链、`net_uart` 参数化与"776 B 钉住"的代价、七个设计决策、十档体积、40 道闸门、**与课件三处差异** |
+| architecture | [四层架构解析 · WiFi-MQTT 上云](docs/architecture/四层架构解析-WiFi-MQTT上云-1.0.md) | **2.2 章节主文档**（该册口径：四条链、十档体积、40 道闸门）：`net_uart` 参数化与"776 B 钉住"的代价、七个设计决策、**与课件三处差异** |
 | architecture | [四层架构解析 · DHT11 温湿度与 LED 联动](docs/architecture/四层架构解析-DHT11温湿度与LED联动-1.0.md) | 上一册：三条链两个合流点、六个设计决策、七档体积、29 道闸门、与五层 H743 对照 |
 | architecture | [四层架构解析 · 串口控灯例程](docs/architecture/四层架构解析-串口控灯例程-1.0.md) | 再上一册：两条链与合流点、14 跳旅程、感知层扩接口、互斥设计、实测数据 |
 | architecture | [四层架构解析 · 最简 LED 例程](docs/architecture/四层架构解析-最简LED例程-1.0.md) | 入门主文档（v2.1b 纯闪烁） |
-| software-engineering | [module_cfg 配置体系与两级开关](docs/software-engineering/module_cfg配置体系与两级开关-1.0.md) | 一拆四、包含顺序、**40 道闸门逐条**、四链依赖图、九个裁剪场景、MX 调用点纪律 |
+| software-engineering | [module_cfg 配置体系与两级开关](docs/software-engineering/module_cfg配置体系与两级开关-1.0.md) | 一拆四、包含顺序、两级开关写法、**逐条说明每道闸门防的是什么事故**、MX 调用点纪律、开关管不到 Core 层。正文成文于 2.2（40 道 / 四条链 / 九个场景） |
 | software-engineering | [串口三件套 · DMA 循环接收与 IDLE 判帧](docs/software-engineering/串口三件套-DMA循环接收与IDLE判帧-1.0.md) | 判帧数学、环形缓冲、ISR 纪律、出错自愈、缓冲大小怎么算、坑清单（实例表就是对它的复用） |
 | software-engineering | [闪烁状态机与契约式注释](docs/software-engineering/闪烁状态机与契约式注释-1.0.md) | 状态机三原则、500 ms 逐拍推演、五联表模板 |
-| tutorials | [t04 · 从零给工程接 WiFi-MQTT 上云](docs/tutorials/t04-从零给工程接WiFi-MQTT上云.md) | **本册**：Step 0~9（接线 + 云端六步 + 六段连接）+ 三板斧 + 4 道练习 |
+| tutorials | [t05 · 从零给工程接 IWDG 看门狗](docs/tutorials/t05-从零给工程接看门狗.md) | **本册**：Step 0~8（HAL 驱动接入 + cfg 五件套 + 两跳链 + HANG 演示）+ 三板斧 + 5 道练习 |
+| tutorials | [t04 · 从零给工程接 WiFi-MQTT 上云](docs/tutorials/t04-从零给工程接WiFi-MQTT上云.md) | Step 0~9（接线 + 云端六步 + 六段连接）+ 三板斧 + 4 道练习 |
 | tutorials | [t03 · 从零给工程接 DHT11 与阈值联动](docs/tutorials/t03-从零给工程接DHT11与阈值联动.md) | Step 0~9 手写顺序 + **三板斧**（看 stage / 看自检行 / 确认物理条件）+ 5 道练习 |
 | tutorials | [t02 · 从零给工程接串口控灯](docs/tutorials/t02-从零给工程接串口控灯.md) | 前置：Step 0~9 接 USART1，每步含"目标 / 做法 / 自检" |
 | tutorials | [t01 · 从零搭建四层 LED 闪烁](docs/tutorials/t01-从零搭建四层LED闪烁.md) | 再前置：先会闪灯 |
-| reference | [引脚与符号速查表](docs/reference/引脚与符号速查表.md) | 引脚 / 时基 / 50 个文件 / 105 个函数 / 六条链 / 命令表 + DHT11、MQTT 与存储输出 / 宏与枚举 / 多档体积 / 排障速查 |
+| reference | [引脚与符号速查表](docs/reference/引脚与符号速查表.md) | 引脚 / 时基 / 54 个文件 / 122 个函数 / 七条链 / 命令表 + DHT11、MQTT、存储与看门狗输出 / 宏与枚举 / 多档体积 / 排障速查 |
+| test | [06 · 看门狗链测试文档与用例](docs/test/06-看门狗链-测试文档和用例.md) | 分层用例 + 集成 5 条 + 10 条闸门 + **裁剪态三档（已实测，含 gc 验收单）** + 健康度清单 |
 | test | [05 · WiFi-MQTT 上云链测试文档与用例](docs/test/05-WiFi-MQTT链-测试文档和用例.md) | 五层分层用例 + 集成 6 条 + 11 条闸门 + **多档裁剪态（已实测）** + 健康度清单 |
 | test | [04 · DHT11 链测试文档与用例](docs/test/04-DHT11链-测试文档和用例.md) | 四组分层用例 + 12 条闸门 + **7 档裁剪态 + 3 个反向用例**（均已实测） |
 | test | [03 · 上板实测操作卡](docs/test/03-上板实测操作卡.md) | **照做清单**：接线 → 烧录 → 快闪自检 → 五条命令 → **Step 9+ DHT11 三动作（捏热/哈气/拔线）** → 20 项记录表 → 故障速查 |
 | test | [02 · 串口链测试文档与用例](docs/test/02-UART链-测试文档和用例.md) | 分层 + 集成 + 11 条闸门（已实测）+ 3 组裁剪态（已实测） |
 | test | [01 · LED 链测试文档与用例](docs/test/01-LED链-测试文档和用例.md) | 上一版的闪烁用例 |
-| teaching | `docs/teaching/*.pptx` | 培训课件：1.1 架构与运维职责、1.2 开发环境搭建、**1.3 构架搭建与分层与 LED 灯控制**、**1.4 DHT11 传感器与 LED 灯联动**、**2.2 WiFi-MQTT 上云（本册对应）**、其余 2.1 / 3.x~5.x |
+| teaching | `docs/teaching/ppt/*.pptx` | 培训课件：1.1 架构与运维职责、1.2 开发环境搭建、**1.3 构架搭建与分层与 LED 灯控制**、**1.4 DHT11 传感器与 LED 灯联动**、**2.2 WiFi-MQTT 上云**、**2.4 项目实操-看门狗（本册对应）**、其余 2.1 / 2.3 / 3.x~5.x |
+| reports | [2026-10-30 · 看门狗链与参数链修复报告](docs/reports/2026-10-30-看门狗链与参数链修复报告.md) | 上板日志暴露的两处既有缺陷（参数区 CRC 漏刷新、存储头擦除失败无返回码）：**一页纸摘要 + 根因推导 + 3 文件 +27 行改动 + 17 档修复前后对比与增量归因 + 上板复验清单 + 建议提交信息** |
 
 > 文档里的**代码片段、行数、体积、报错信息**全部取自磁盘上的真实文件，不是二手转述。
 > 改完 `.md` 后在 `docs/` 下跑 `python build_docs.py` 重新生成网页版。
@@ -912,7 +980,7 @@ if (snap.valid == 0U) { /* 还没采到过：如实说"没数据"，不编一个
 
 ### 报 `#error "..."` 编译不过
 
-这是**设计好的**。40 道闸门会在编译期拦下配置矛盾——
+这是**设计好的**。61 道闸门会在编译期拦下配置矛盾——
 比如关了闪烁状态机却还开着串口控灯，或关了串口链却还留着要打印的 DHT11，
 或留着 `NET_ESP8266_ENABLE` 却把 `NET_UART3_ENABLE` 关了。
 读 `#error` 后面的文字，它会告诉你是哪两个宏冲突。
@@ -958,11 +1026,22 @@ if (snap.valid == 0U) { /* 还没采到过：如实说"没数据"，不编一个
 
 `CMakeLists.txt` 用 `get_filename_component(... NAME)` 自动取文件夹名作为工程名。这是有意设计——方便一个模板复制成多个工程。
 
+### 板子每隔约 3 秒自己重启，串口横幅一遍遍重打
+
+**九成是看门狗没人喂**。先看 `[WDT] boot: last reset =` 那一行：
+
+- `IWDG watchdog` → 上次是被狗咬醒的：是不是敲过 `HANG`（预期内演示）？
+  否则查喂狗任务——`APP_WDT_FEED_PERIOD_MS` 改大到 ≥1500 ms 会被编译期闸门拦，
+  能编过却咬狗多半是任务没建起来（开关裁剪组合）或栈溢出；
+- `power-on/others` 却一直循环重打横幅 → 不是狗咬的，查供电与晶振；
+- **调试器单步超过 3 秒也会咬狗**：`per_iwdg.c` 已调 `__HAL_DBGMCU_FREEZE_IWDG()`
+  （halt 期间 IWDG 停止计数），确认烧的是新固件。
+
 ---
 
-## 四章演进：v2.1b → 加串口 → 加 DHT11 → 加上云
+## 六章演进：v2.1b → 加串口 → 加 DHT11 → 加上云 → 加存储 → 加看门狗
 
-`v2.1b` 是会闪灯的四层工程（15 文件 / 1091 行），后面分三步长成现在这样：
+`v2.1b` 是会闪灯的四层工程（15 文件 / 1091 行），后面分五步长成现在这样：
 
 | 章节 | 改动类型 | 内容 |
 |---|---|---|
@@ -980,9 +1059,17 @@ if (snap.valid == 0U) { /* 还没采到过：如实说"没数据"，不编一个
 | | 新增（Core） | `usart.c` 的 `USART3` 段 + `dma.c` 的 `DMA1_Stream1`；`stm32f4xx_it.c` 的 `USART3_IRQHandler` 与 `DMA1_Stream1_IRQHandler` |
 | | 改动（Core） | `main.c` 加 1 行 `MX_USART3_UART_Init()`；`.ioc` 配 PB10/PB11 + DMA1_Stream1 + NVIC |
 | | 小计 | 29 文件 / 3677 行 → **37 文件 / 6639 行**（+2962 = 新增 2563 + 扩已有 399） |
-| **未动** | | 1.4 章节没动任何串口文件；本册没动感知层四件（`per_gpio`/`per_led`/`per_delay`/`per_dht11`）与 `app_blink`/`app_cmd`/`app_link`；`freertos.c` 的两行挂载三次都没改 |
+| **2.3 存储** | 新增（user） | 12 个文件 / **2146 行**：`net_i2c.h/.c`、`net_spi.h/.c`、`mod_eeprom.h/.c`、`mod_flash.h/.c`、`app_param.h/.c`、`app_logger.h/.c` |
+| | 改动（user） | `app_cmd.c` +93（TH/ISCAN/PDUMP/FID 等命令）、`app_link.c` +33（阈值运行时读配置块）、`app_task` 加第五个任务、cfg 四件 +212（六开关 / 20 参数 / 12 闸门 / 链路表） |
+| | 新增（Core） | `i2c.c`（I2C1 PB8/PB9）/ `spi.c`（SPI1 PB3/4/5）；`gpio.c` 加 F_CS（PG10） |
+| | 小计 | 37 文件 / 6639 行 → **50 文件 / 9730 行**（+3091 = 新增 2146 + 扩已有 945） |
+| **2.4 看门狗** | 新增（user） | 4 个文件 / **389 行**：`per_iwdg.h/.c`（100/102）、`app_watchdog.h/.c`（57/130） |
+| | 改动（user） | cfg 三件 +136（4 开关 / 7 参数 / 9 闸门 / 场景⑩ / 日志层挂 DHT11）、`module_cfg.h` +5、`app_cmd.c` +14（HANG 命令）、`app_task.h/.c` +5/+36（第六个任务）；另对账修正 2.3 欠账 `app_mqtt.h/.c` +7/+267 |
+| | 改动（Core/Drivers） | `hal_conf.h` 开 `HAL_IWDG_MODULE_ENABLED`；Drivers 补入 `stm32f4xx_hal_iwdg.c/.h`；cmake 登记 |
+| | 小计 | 50 文件 / 9730 行 → **54 文件 / 10616 行**（+886 = 新增 389 + 扩已有 223 + 对账修正 274） |
+| **未动** | | 1.4 章节没动任何串口文件；2.2 没动感知层四件（`per_gpio`/`per_led`/`per_delay`/`per_dht11`）与 `app_blink`/`app_cmd`/`app_link`；2.4 没动网络层与平台层；`freertos.c` 的两行挂载五次都没改 |
 
-> 注意每一章都**没动上一章已有的核心文件**——四条链在代码上是彼此隔离的，
+> 注意每一章都**没动上一章已有的核心文件**——七条链在代码上是彼此隔离的，
 > 它们在 `APP_BLINK_*` 与 `per_led` 两个合流点相遇，而不是在源码里互相穿插。
 > 唯一被两次改写的只有 `net_uart`（1.3 从无到有、2.2 改成实例表），
 > 而它改的正是"**同一份知识要服务第二个串口**"这件事。

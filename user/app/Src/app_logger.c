@@ -49,6 +49,19 @@ static void out_u32(uint32_t v)
     out_str(&b[i]);
 }
 
+static void out_rc(int rc)   /* 返回码带符号打印：-2 / -3 / -4 直接进日志 */
+{
+    if (rc < 0)
+    {
+        out_str("-");
+        out_u32((uint32_t)(-rc));
+    }
+    else
+    {
+        out_u32((uint32_t)rc);
+    }
+}
+
 static void out_hex8(uint8_t v)
 {
     static const char H[] = "0123456789ABCDEF";
@@ -104,10 +117,17 @@ int APP_LOGGER_Init(void)
         (memcmp(hdr, s_hdr_magic, 4U) != 0U) ||
         (hdr[4] != LOG_HDR_VERSION))
     {
-        if (mod_flash_sector_erase(APP_LOG_HDR_ADDR) != MOD_FLASH_OK)
+        /* ★ 失败必须说出返回码：三种失败方向的排查方法完全不同，只说
+         *   "erase FAILED" 等于让使用者从零开始猜（本册首跑就踩过这一条） */
         {
-            out_str("[FLASH ] header erase FAILED\r\n");
-            return APP_LOGGER_ERR_IO;
+            int rc = mod_flash_sector_erase(APP_LOG_HDR_ADDR);
+            if (rc != MOD_FLASH_OK)
+            {
+                out_str("[FLASH ] header erase FAILED rc=");
+                out_rc(rc);
+                out_str(" (-2=IO: PB3/4/5+PG10 CS, -3=TIMEOUT: tSE 超时, -4=WREN: WEL 没置上)\r\n");
+                return APP_LOGGER_ERR_IO;
+            }
         }
         hdr[0] = s_hdr_magic[0]; hdr[1] = s_hdr_magic[1];
         hdr[2] = s_hdr_magic[2]; hdr[3] = s_hdr_magic[3];

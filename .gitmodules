@@ -1,3 +1,7 @@
 [submodule "docs"]
 	path = docs
-	url = https://gitee.com/catemo/iot_-m4_-l4-docs.git
+	# 相对路径：父仓库 clone 到哪一侧，子模块就去哪一侧拉
+	#   Gitee  : https://gitee.com/catemo/iot_-m4_-l4.git      -> .../iot_-m4_-l4-docs.git
+	#   GitHub : git@github.com:catemo/iot_-m4_-l4.git         -> .../iot_-m4_-l4-docs.git
+	# 两侧仓库名保持一致，这一份配置才两边都成立（见 gitmodules(5) 相对 URL 规则）
+	url = ../iot_-m4_-l4-docs.git

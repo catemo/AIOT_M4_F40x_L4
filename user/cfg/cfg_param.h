@@ -205,7 +205,9 @@
 #define W25Q64_PAGE_SIZE        256    /* 页(字节)：编程单位，一次编程绝不跨页               */
 #define W25Q64_SIZE_BYTES       0x800000u /* W25Q64 总容量 8 MB                             */
 #define W25Q128_SIZE_BYTES      0x1000000u /* W25Q128 总容量 16 MB（板上实测型号）           */
-#define W25Q64_SECTOR_ERASE_TIMEOUT_MS  400  /* 扇区擦典型 45 ms，按数据手册上限留 400 ms     */
+#define W25Q64_SECTOR_ERASE_TIMEOUT_MS  800  /* 扇区擦典型 45 ms；W25Q64/128 的 tSE 上限都是
+                                               * 400 ms，取 800 是给"边缘超时"留一倍余量——
+                                               * 板载实测为 W25Q128，按上限卡 400 会偶发 TIMEOUT */
 #define W25Q64_PAGE_PROG_TIMEOUT_MS     10   /* 页编程典型 0.6 ms，上限留 10 ms               */
 
 /* ---------- 存储链·应用层参数 ---------- */
@@ -228,5 +230,32 @@
  * ★ 单位仍是【字节】！ */
 #define APP_STORAGE_TASK_STACK_SIZE 2048  /* 存储任务栈大小(字节) */
 #define APP_STORAGE_TASK_PRIO   1      /* 与其余业务任务平级：慢速存储不抢占本地控制 */
+
+/* ---------- 看门狗链（IWDG）硬件参数（2.4 新增） ----------
+ * 超时公式：timeout_ms = (分频 × 重载) / LSI(≈32 kHz) × 1000 = 两数相乘再除 32。
+ *   本例 64 × 1500 / 32 = 3000 ms —— "死亡倒计时"3 秒。
+ * 为什么不用 CubeMX 默认的 4 / 4095：那只有约 0.5 秒，引导流程（串口链路
+ *   初始化 + 任务起跑）就可能超 0.5 s，上电即陷入"复位 → 重启 → 再复位"循环。
+ * ★ 两数都写在 cfg 而不是 per_iwdg.c：改超时只改这两行，不用去翻驱动。 */
+#define PER_IWDG_DIV            64      /* LSI 预分频：只能是 4/8/16/32/64/128/256 之一 */
+#define PER_IWDG_RELOAD         1500    /* 重载值：12 位递减计数器初值，1..4095 */
+#define PER_IWDG_TIMEOUT_MS     ((PER_IWDG_DIV * PER_IWDG_RELOAD) / 32U)  /* 派生：实际超时(ms) */
+
+/* ---------- 看门狗链（IWDG）应用层参数 ---------- */
+/* 喂狗周期(ms)：必须远小于超时——500 ms 喂一次，留 2.5 s 余量。
+ * 闸门守着"喂狗周期 × 2 ≤ 超时"这条底线（cfg_check.h），
+ * 改大到 1500 ms 以上就会在编译期被拦下。 */
+#define APP_WDT_FEED_PERIOD_MS  500
+
+/* Alive 打印节奏：每喂这么多次打一行 "[WDT] Alive"。
+ * 4 × 500 ms = 每 2 秒一行——既能证明"狗一直有人喂"，又不刷屏。 */
+#define APP_WDT_ALIVE_EVERY     4
+
+/* ---------- 看门狗任务栈 / 优先级 ----------
+ * 栈 512（六个任务里最小）：链路最浅（app → per_iwdg → HAL 就到底），
+ *   不用 printf，行缓冲只有几十字节。
+ * ★ 单位仍是【字节】！512 = configMINIMAL_STACK_SIZE(128 字) × 4，是下限。 */
+#define APP_WDT_TASK_STACK_SIZE 512     /* 看门狗任务栈大小(字节) */
+#define APP_WDT_TASK_PRIO       1       /* 与其余任务平级：喂狗不该抢占采集与上云 */
 
 #endif /* CFG_PARAM_H */

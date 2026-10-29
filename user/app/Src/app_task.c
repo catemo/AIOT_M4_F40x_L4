@@ -15,14 +15,19 @@
  *  接口的完整说明（功能/参数/返回值/调用处/注意事项）写在 app_task.h，
  *  本文件的注释侧重"任务是怎么登记进内核的"。
  *
- *  本工程的三个任务（都在本文件登记，每个各套一层开关）：
- *      app_led_task    —— LED 闪烁任务（每 1ms 推进 APP_BLINK_process）
- *      app_cmd_task    —— 串口命令任务（串口控灯章节：收命令 → 控灯）
- *      app_dht11_task  —— DHT11 采集任务（DHT11 章节：2 秒读一次 → 阈值联动）
- *  创建顺序刻意是"先 LED、再串口、最后 DHT11"：
+ *  本工程的六个任务（都在本文件登记，每个各套一层开关）：
+ *      app_led_task      —— LED 闪烁任务（每 1ms 推进 APP_BLINK_process）
+ *      app_cmd_task      —— 串口命令任务（串口控灯章节：收命令 → 控灯）
+ *      app_dht11_task    —— DHT11 采集任务（DHT11 章节：2 秒读一次 → 阈值联动）
+ *      app_mqtt_task     —— 上云任务（2.2 章节：先连网，再每 5 秒上报）
+ *      app_storage_task  —— 存储任务（2.3 章节：一个任务驱动参数与日志两条链）
+ *      app_watchdog_task —— 看门狗喂狗任务（2.4 章节：500 ms 喂狗 + HANG 演示）
+ *  创建顺序刻意是"先 LED、再串口、再 DHT11、再上云、再存储、最后看门狗"：
  *    - 先 LED：把灯引脚初始化好，后面的任务才能直接点灯
  *    - 再串口：把接收链路拉起来（DMA + IDLE），同时也做"快闪 3 次"上电自检
- *    - 最后 DHT11：它要用串口打印，且启动自检要读 25 ms 的传感器
+ *    - 再 DHT11：它要用串口打印，且启动自检要读 25 ms 的传感器
+ *    - 再上云与存储：它们要读 DHT11 的快照，采集先跑起来首条才不是空数据
+ *    - 最后看门狗：它打印要走串口链，串口链路先就位启动行才不会丢
  *
  *  ★ 本文件被 cfg 的开关控制，但函数 app_taskCreate() 本身【永远存在】：
  *      APP_TASK_ENABLE = 1 → 正常建任务（当前情形）
@@ -41,6 +46,7 @@
 #include "app_dht11.h" /* DHT11 采集任务（DHT11 章节新增） */
 #include "app_mqtt.h"  /* WiFi-MQTT 上云任务（2.2 章节新增） */
 #include "app_param.h" /* 存储任务（2.3 章节新增：一个任务驱动两条链） */
+#include "app_watchdog.h" /* 看门狗喂狗任务（2.4 章节新增） */
 #include "cmsis_os.h"  /* FreeRTOS 的 CMSIS-RTOS V2 封装：osThreadNew 等 */
 #include "main.h"      /* 包含 stm32f4xx_hal.h，提供 Error_Handler 与 LED 引脚宏 */
 #include "task.h"      /* FreeRTOS 原生任务 API（TaskHandle_t 等） */
@@ -130,11 +136,28 @@ static const osThreadAttr_t s_app_storage_task_attr = {
     .priority   = (osPriority_t)APP_STORAGE_TASK_PRIO,
 };
 #endif /* APP_PARAM_ENABLE || APP_LOGGER_ENABLE */
+
+#if APP_WATCHDOG_ENABLE
+/* ========== 看门狗喂狗任务（2.4 新增） ========== */
+
+/* 任务句柄：创建成功非 NULL、失败为 NULL（堆内存不足时） */
+static TaskHandle_t s_app_wdt_task_handle = NULL;
+
+/* 任务属性：名字 / 栈 / 优先级，数值全部来自 cfg 横切层 cfg_param.h。
+ * 栈 512（六个任务里最小）：链路最浅（app → per_iwdg → HAL 就到底），
+ * 不用 printf，行缓冲只有几十字节。 */
+static const osThreadAttr_t s_app_wdt_task_attr = {
+    .name       = "app_watchdog_task",
+    .stack_size = APP_WDT_TASK_STACK_SIZE,         /* 栈大小（单位：字节！） */
+    .priority   = (osPriority_t)APP_WDT_TASK_PRIO, /* 与其余任务平级 */
+};
+#endif /* APP_WATCHDOG_ENABLE */
 #endif /* APP_TASK_ENABLE */
 
 /*----------------------------------------------------------------------------
- * 函数功能：创建全部用户任务（本例程创建 3 个：
- *           app_led_task + app_cmd_task + app_dht11_task）
+ * 函数功能：创建全部用户任务（本例程最多 6 个：app_led_task + app_cmd_task
+ *           + app_dht11_task + app_mqtt_task + app_storage_task
+ *           + app_watchdog_task，各自受 cfg 开关控制）
  * 参数    ：无
  * 返回值  ：无
  * 调用处  ：Core/Src/freertos.c 的 MX_FREERTOS_Init()，在 osKernelStart() 之前
@@ -219,4 +242,17 @@ void app_taskCreate(void)
         Error_Handler();   /* 堆内存不足：停机保留现场 */
     }
 #endif /* APP_TASK_ENABLE && (APP_PARAM_ENABLE || APP_LOGGER_ENABLE) */
+
+#if APP_TASK_ENABLE && APP_WATCHDOG_ENABLE
+    /* 创建看门狗喂狗任务：进入调度后由 app_watchdog_task() 每 500 ms 喂一次狗。
+     * ★ 创建顺序放在最后一个，理由是"它打印要走串口链、且只守护别人"：
+     *   串口任务先起跑把 MOD_UART1 链路拉起来，它的启动两行才不会丢
+     *   （任务内部还另留了 100 ms 余量，双保险）。
+     *   至此本工程六个任务的固定次序：LED → 串口 → DHT11 → MQTT → 存储 → 看门狗。 */
+    s_app_wdt_task_handle = osThreadNew(app_watchdog_task, NULL, &s_app_wdt_task_attr);
+    if (s_app_wdt_task_handle == NULL)
+    {
+        Error_Handler();   /* 堆内存不足：停机保留现场 */
+    }
+#endif /* APP_TASK_ENABLE && APP_WATCHDOG_ENABLE */
 }

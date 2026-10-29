@@ -42,6 +42,9 @@
 #if APP_LOGGER_ENABLE
 #include "app_logger.h"  /* LOG：日志回读（index 0 = 最新） */
 #endif
+#if APP_WATCHDOG_ENABLE
+#include "app_watchdog.h" /* HANG：卡死演示（请求看门狗任务罢工，2.4 新增） */
+#endif
 
 /* ===================== 命令表（帮助文本） =====================
  * ★ 输出全部用英文：源文件是 UTF-8，中文发出去遇到 GBK 编码的串口助手会
@@ -60,6 +63,7 @@ static const char *const s_help =
     "  FID                  read SPI Flash JEDEC ID + model name\r\n"
     "  FDUMP [addr] [len]   dump Flash raw bytes (addr supports 0x)\r\n"
     "  LOG [n]              read log record n (0 = newest)\r\n"
+    "  HANG                 simulate a hang: stop feeding IWDG, reset in ~3s\r\n"
     "  HELP                 show this help\r\n"
     "> ";
 
@@ -606,6 +610,16 @@ static void cmd_exec(const char *cmd)
              ((cmd[3] == ' ') || (cmd[3] == '\0')))
     {
         cmd_log(&cmd[3]);   /* "LOG 0"：回读最新一条日志 */
+    }
+#endif
+#if APP_WATCHDOG_ENABLE
+    else if (strcmp(cmd, "HANG") == 0)
+    {
+        /* 卡死演示（2.4 新增）：只置标志，真正的"罢工"由看门狗任务执行——
+         * 这样本任务还能把下面的 OK 行发完，演示语义也更干净：
+         * 是"喂狗的人罢工"，不是"串口任务先死"。 */
+        APP_WATCHDOG_HangDemo();
+        MOD_UART1_SendString("OK: HANG requested, watchdog will bite in ~3s\r\n");
     }
 #endif
     else

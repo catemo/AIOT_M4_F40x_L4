@@ -360,8 +360,13 @@ int APP_PARAM_Init(void)
         s_valid = 1U;
     }
 
-    /* ⑤ 重启计数 +1 写回 —— 掉电保持最直观的证据（一次启动一次写，寿命可控） */
+    /* ⑤ 重启计数 +1 写回 —— 掉电保持最直观的证据（一次启动一次写，寿命可控）
+     * ★ 改完内容必须刷新 CRC 再写：CRC 覆盖 reboot_count 所在的 body，
+     *   漏刷新的后果是"写后 memcmp 通过（RAM 与芯片一模一样），但下一次
+     *   三关校验永远失败"——串口每 3 s 刷一行 readback INVALID，
+     *   且下次上电会把配置判为 INVALID 重写默认值（重启计数攒不起来）。 */
     s_cfg.reboot_count++;
+    cfg_refresh_crc(&s_cfg);
     {
         int rc = cfg_write_and_check();
         if (rc != APP_PARAM_OK)
