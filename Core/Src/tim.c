@@ -41,7 +41,7 @@ void MX_TIM2_Init(void)
 
   /* USER CODE END TIM2_Init 1 */
   htim2.Instance = TIM2;
-  htim2.Init.Prescaler = 0;
+  htim2.Init.Prescaler = 83;
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
   htim2.Init.Period = 4294967295;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
@@ -62,6 +62,19 @@ void MX_TIM2_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN TIM2_Init 2 */
+
+  /* 微秒计时底座：MX_TIM2_Init() 只做初始化，计数器要到这一步才真正开始跑。
+   * 配置要点（缺一不可）：
+   *   - Prescaler = 83：APB1 定时器时钟 84 MHz → 84 MHz/(83+1) = 1 MHz = 1  tick/µs
+   *   - Period = 0xFFFFFFFF：32 位自由向上计数，不触发更新中断
+   *   - 只调 HAL_TIM_Base_Start()，从不调 HAL_TIM_Base_Start_IT()：
+   *     DHT11 时序要靠"读 CNT 做差"取微秒，进中断反而会打断时序测量
+   * 本计数器是全局共享底座（DHT11 用它做 µs 计时），故不受模块开关控制：
+   * 关掉 DHT11 后它仍在跑，代价只是一直开着的一个定时器。 */
+  if (HAL_TIM_Base_Start(&htim2) != HAL_OK)
+  {
+    Error_Handler();
+  }
 
   /* USER CODE END TIM2_Init 2 */
 

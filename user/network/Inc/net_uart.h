@@ -1,11 +1,11 @@
 /**
  ******************************************************************************
  * @file    net_uart.h
- * @brief   网络层（network）—— UART1 字节流接口（DMA 循环接收 + IDLE 判帧 + 环形缓冲）
+ * @brief   网络层（network）—— UART 字节流接口（DMA 循环接收 + IDLE 判帧 + 环形缓冲）
  *
  *  本层在四层架构里的位置与职责：
- *      app        命令解析（一行命令 → 一个动作）
- *      platform   统一入口（MOD_UART1_*：给上层一套"与硬件无关"的名字）
+ *      app        命令解析（一行命令 → 一个动作）/ MQTT 业务
+ *      platform   统一入口（MOD_UART1_* / MOD_WIFI_*：给上层一套"与硬件无关"的名字）
  *    → network    本层：字节流的搬运工（收进来、存起来、发出去）
  *      perception 引脚与传感器（LED / DHT11 的时序）
  *
@@ -14,25 +14,34 @@
  *    ② IDLE 判帧：总线一安静就产生空闲中断，此时把新到的字节切成一帧
  *    ③ 环形缓冲：把"中断里收到的"暂存起来，等任务有空了再来取
  *
+ *  ★ 本册（WiFi-MQTT）把这一层从"只认 huart1"改成【实例表】：
+ *      NET_UART_DBG  → USART1（PA9/PA10，115200）：调试与命令通道
+ *      NET_UART_WIFI → USART3（PB10/PB11，115200）：ESP8266 的 AT 通道
+ *    两个实例共用同一套判帧数学、同一套环形缓冲代码，差别只在表里的
+ *    三个指针（huart / hdma_rx / 缓冲区）。这就是"参数化"的全部含义：
+ *    新增一个串口 = 表里加一行，判断逻辑一行不改。
+ *
  *  ★ 三条硬纪律：
  *    ① 本层是【唯一】除了感知层之外可以碰 HAL 的一层
  *       （仅 HAL_UART_* / HAL_DMA_*，且受 cfg 的 HAL_UART_MODULE_ENABLE 看管）
  *    ② ISR 里只做"判帧 + 搬数据"，绝不调任何 RTOS API：
- *       USART1 抢占优先级 = 5，与 configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY
- *       恰好相等（临界值）。本工程统一纪律：ISR 内不调任何 RTOS API——
- *       判帧要越快越好，也避免日后改优先级踩雷
- *    ③ 上层（platform / app）只许 include platform/Inc/mod_uart1.h，
+ *       USART1 / USART3 抢占优先级都是 5，与
+ *       configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY 恰好相等（临界值）。
+ *       本工程统一纪律：ISR 内不调任何 RTOS API
+ *    ③ 上层（platform / app）只许 include platform/ 下的入口头文件，
  *       永远不许 include 本文件——这就是"统一入口"存在的意义
  *
  *  分工边界（与 CubeMX 的分工）：
- *    USART1 / GPIO / DMA / 时钟 / NVIC 的初始化由 CubeMX 生成代码完成
- *    （Core/Src/usart.c、dma.c，main() 里调 MX_DMA_Init / MX_USART1_UART_Init）；
+ *    USART1 / USART3 / GPIO / DMA / 时钟 / NVIC 的初始化由 CubeMX 生成代码完成
+ *    （Core/Src/usart.c、dma.c，main() 里调 MX_DMA_Init / MX_USARTx_UART_Init）；
  *    本文件只做 CubeMX 不管的三件事：
  *      ① 启动 DMA 循环接收 + 打开 IDLE 中断（net_uart_init）
  *      ② IDLE 中断里"判帧搬数据"（net_uart_rx_idle_handler，由 it.c 调用）
  *      ③ 出错后自愈重启（HAL_UART_ErrorCallback）
  *
- *  硬件对应：USART1，PA9 = TX，PA10 = RX，115200-8-N-1
+ *  硬件对应：
+ *    USART1：PA9 = TX，PA10 = RX，115200-8-N-1，RX DMA = DMA2_Stream2（循环）
+ *    USART3：PB10 = TX，PB11 = RX，115200-8-N-1，RX DMA = DMA1_Stream1（循环）
  ******************************************************************************
  */
 #ifndef NET_UART_H
@@ -42,83 +51,101 @@
 
 /* ===================== 返回码 ===================== */
 #define NET_UART_OK        0   /* 成功 */
-#define NET_UART_ERR_PARAM 1   /* 参数错误（缓冲指针为空 / 长度为 0） */
+#define NET_UART_ERR_PARAM 1   /* 参数错误（实例号越界 / 缓冲指针为空 / 长度为 0） */
+
+/* ===================== 实例编号 =====================
+ * ★ 编号是"表的下标"，一旦被写进代码就不能随意调换顺序：
+ *   net_uart.c 的 s_uart[] 按同一顺序排列，调换会导致 UART1 的数据
+ *   跑到 UART3 的缓冲里——这类错误编译期发现不了，现象是"串口乱码"。
+ * ★ 两个实例的编号【恒等于 0 / 1】，与开关无关：
+ *   关掉某条链时，对应表项被标成"不可用"（ready = 0），函数直接返回，
+ *   而不是让枚举跟着开关变——枚举一变，上层的 case 分支就全错位了。 */
+typedef enum
+{
+    NET_UART_DBG  = 0,   /* USART1：调试打印 + 串口命令（1.3 章节起就有） */
+    NET_UART_WIFI = 1,   /* USART3：ESP8266 AT 通道（2.2 章节新增）      */
+    NET_UART_COUNT       /* 实例总数（= 2），表长与越界判断都用它        */
+} NET_UART_Id_t;
 
 /*----------------------------------------------------------------------------
- * 函数功能：启动 UART1 接收链路（DMA 循环接收 + 打开 IDLE 中断）
- * 参数    ：无
+ * 函数功能：启动指定串口的接收链路（DMA 循环接收 + 打开 IDLE 中断）
+ * 参数    ：id —— 实例号（NET_UART_DBG / NET_UART_WIFI）
  * 返回值  ：无
- * 调用处  ：platform/mod_uart1.c 的 MOD_UART1_Init()
- *           （完整初始化链：app_cmd_task → MOD_UART1_Init → 本函数）
- * 注意事项：① USART1 / DMA 本体已在 main() 里由 CubeMX 代码初始化完毕，
+ * 调用处  ：platform/mod_uart1.c 的 MOD_UART1_Init()（传 NET_UART_DBG）
+ *           network/net_esp8266.c 的 net_esp8266_init()（传 NET_UART_WIFI）
+ * 注意事项：① USART / DMA 本体已在 main() 里由 CubeMX 代码初始化完毕，
  *              本函数只是把"收数据"拉起来，不重复配置波特率与引脚
  *           ② 可重复调用：内部会把环形缓冲复位、DMA 位置归零后重新拉起，
  *              出错自愈时也走它（幂等）
- *           ③ 返回的 HAL 状态被本函数内部消化：启动失败时会自动把
+ *           ③ 实例被开关裁掉时（表项 ready = 0）直接返回，不碰任何寄存器
+ *           ④ 返回的 HAL 状态被本函数内部消化：启动失败时会自动把
  *              HAL 的接收状态机复位成 READY 再启动一次，
- *              所以调用者不必检查返回值（这是本层替上层挡掉的一个经典坑）
+ *              所以调用者不必检查返回值
  *----------------------------------------------------------------------------*/
-void net_uart_init(void);
+void net_uart_init(NET_UART_Id_t id);
 
 /*----------------------------------------------------------------------------
- * 函数功能：IDLE 空闲中断处理 —— 判帧，并把新到的字节搬进软件环形缓冲
- * 参数    ：无
+ * 函数功能：IDLE 空闲中断处理 —— 判帧，并把新到的字节搬进该实例的环形缓冲
+ * 参数    ：id —— 实例号（由 it.c 里对应的中断入口传入）
  * 返回值  ：无
- * 调用处  ：Core/Src/stm32f4xx_it.c 的 USART1_IRQHandler()
- *           （在 HAL_UART_IRQHandler【之前】调用，顺序是串口链路的命门）
- * 注意事项：① ★ 本函数【永远存在】：NET_UART1_ENABLE = 0 时它变成空壳，
+ * 调用处  ：Core/Src/stm32f4xx_it.c 的 USART1_IRQHandler / USART3_IRQHandler
+ *           （都在 HAL_UART_IRQHandler【之前】调用，顺序是串口链路的命门）
+ * 注意事项：① ★ 本函数【永远存在】：实例被裁掉时它变成空壳，
  *              因为 it.c 是 CubeMX 生成文件、里面的调用点不受本工程开关控制，
  *              关开关不该炸链接（与 app_taskCreate() 是同一套设计）
- *           ② 本函数运行在【中断上下文】：只搬数据，不阻塞、不打印、
- *              不调任何 RTOS API；一次最多搬 NET_UART1_RX_DMA_BUF_SIZE 字节
+ *           ② 运行在【中断上下文】：只搬数据，不阻塞、不打印、
+ *              不调任何 RTOS API；一次最多搬该实例的 DMA 缓冲大小字节
  *           ③ 环形缓冲满了会自动丢弃：宁可丢字节，也不能让 ISR 卡住——
  *              串口是外设，外设绝不能拖死 CPU
- *           ④ 本函数是"三件套"（DMA 循环 + IDLE 判帧 + 环形缓冲）的核心，
- *              判帧的数学推导见 docs/software-engineering/ 的对应文档
  *----------------------------------------------------------------------------*/
-void net_uart_rx_idle_handler(void);
+void net_uart_rx_idle_handler(NET_UART_Id_t id);
 
 /*----------------------------------------------------------------------------
- * 函数功能：查询接收环形缓冲里有多少字节可读
- * 参数    ：无
- * 返回值  ：可读字节数（0 = 暂时没收到东西）
- * 调用处  ：platform/mod_uart1.c 的 MOD_UART1_Available()
- * 注意事项：只报"当前可读"，不保证下一刻还在（任务读走的瞬间就减少）
+ * 函数功能：查询该实例接收环形缓冲里有多少字节可读
+ * 参数    ：id —— 实例号
+ * 返回值  ：可读字节数（0 = 暂时没收到东西 / 实例不可用）
+ * 调用处  ：platform/mod_uart1.c、network/net_esp8266.c
  *----------------------------------------------------------------------------*/
-uint32_t net_uart_available(void);
+uint32_t net_uart_available(NET_UART_Id_t id);
 
 /*----------------------------------------------------------------------------
- * 函数功能：从接收环形缓冲读出数据（任务侧的消费接口）
- * 参数    ：buf —— 调用者提供的存放缓冲区
+ * 函数功能：从该实例的接收环形缓冲读出数据（任务侧的消费接口）
+ * 参数    ：id  —— 实例号
+ *           buf —— 调用者提供的存放缓冲区
  *           len —— 期望读取的字节数
  * 返回值  ：实际读到的字节数（缓冲空时返回 0，从不阻塞）
- * 调用处  ：platform/mod_uart1.c 的 MOD_UART1_Read()
+ * 调用处  ：platform/mod_uart1.c、network/net_esp8266.c
  * 注意事项：① 不阻塞：有多少拿多少，没有就返回 0，绝不原地等
  *           ② 与 ISR 里的写操作是单生产者 / 单消费者关系（SPSC），
- *              读写指针各自独占，所以不需要关中断保护（common/ringbuf 的设计前提）
+ *              读写指针各自独占，所以不需要关中断保护
  *----------------------------------------------------------------------------*/
-uint32_t net_uart_read(uint8_t *buf, uint32_t len);
+uint32_t net_uart_read(NET_UART_Id_t id, uint8_t *buf, uint32_t len);
 
 /*----------------------------------------------------------------------------
  * 函数功能：阻塞发送一段数据（轮询方式，短数据足够用）
- * 参数    ：buf —— 待发送数据；len —— 字节数
- * 返回值  ：无（参数非法时直接返回，不发送）
+ * 参数    ：id  —— 实例号
+ *           buf —— 待发送数据；len —— 字节数
+ * 返回值  ：无（参数非法 / 实例不可用时直接返回，不发送）
  * 调用处  ：platform/mod_uart1.c 的 MOD_UART1_Send()
- * 注意事项：① 阻塞发送（超时 100ms）：本例最大用途是回几句短提示，
- *              占用 CPU 的时间在几十微秒量级，可以接受；
+ *           network/net_esp8266.c 的 AT 指令发送与 TCP 数据发送
+ * 注意事项：① 阻塞发送（超时 NET_UART_TX_TIMEOUT_MS）：本例最大用途是
+ *              回几句短提示、发一条 AT 指令或一帧 MQTT 报文（几百字节）。
+ *              115200 下 200 字节约 17 ms，任务上下文可以接受；
  *              量产项目应改成 DMA 发送或中断发送
  *           ② 只能在【任务上下文】调用：阻塞等待会占住整个任务，
  *              放到 ISR 里会把系统拖死
  *----------------------------------------------------------------------------*/
-void net_uart_send(const uint8_t *buf, uint32_t len);
+void net_uart_send(NET_UART_Id_t id, const uint8_t *buf, uint32_t len);
 
 /*----------------------------------------------------------------------------
  * 函数功能：阻塞发送一个以 '\0' 结尾的字符串
- * 参数    ：str —— 待发送字符串（NULL 时直接返回）
+ * 参数    ：id  —— 实例号
+ *           str —— 待发送字符串（NULL 时直接返回）
  * 返回值  ：无
  * 调用处  ：platform/mod_uart1.c 的 MOD_UART1_SendString()
+ *           network/net_esp8266.c 的 AT 指令发送
  * 注意事项：内部自己算长度，调用者不必先 strlen
  *----------------------------------------------------------------------------*/
-void net_uart_send_string(const char *str);
+void net_uart_send_string(NET_UART_Id_t id, const char *str);
 
 #endif /* NET_UART_H */

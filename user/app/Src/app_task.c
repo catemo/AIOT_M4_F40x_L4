@@ -15,11 +15,14 @@
  *  接口的完整说明（功能/参数/返回值/调用处/注意事项）写在 app_task.h，
  *  本文件的注释侧重"任务是怎么登记进内核的"。
  *
- *  本工程的两个任务（都在本文件登记，每个各套一层开关）：
- *      app_led_task   —— LED 闪烁任务（每 1ms 推进 APP_BLINK_process）
- *      app_cmd_task   —— 串口命令任务（串口控灯章节新增：收命令 → 控灯）
- *  创建顺序刻意是"先 LED 后串口"：LED 任务先把灯初始化好，
- *  串口任务起来后才能直接做"快闪 3 次"的上电自检。
+ *  本工程的三个任务（都在本文件登记，每个各套一层开关）：
+ *      app_led_task    —— LED 闪烁任务（每 1ms 推进 APP_BLINK_process）
+ *      app_cmd_task    —— 串口命令任务（串口控灯章节：收命令 → 控灯）
+ *      app_dht11_task  —— DHT11 采集任务（DHT11 章节：2 秒读一次 → 阈值联动）
+ *  创建顺序刻意是"先 LED、再串口、最后 DHT11"：
+ *    - 先 LED：把灯引脚初始化好，后面的任务才能直接点灯
+ *    - 再串口：把接收链路拉起来（DMA + IDLE），同时也做"快闪 3 次"上电自检
+ *    - 最后 DHT11：它要用串口打印，且启动自检要读 25 ms 的传感器
  *
  *  ★ 本文件被 cfg 的开关控制，但函数 app_taskCreate() 本身【永远存在】：
  *      APP_TASK_ENABLE = 1 → 正常建任务（当前情形）
@@ -35,6 +38,8 @@
 #if APP_TASK_ENABLE
 #include "app_led.h"
 #include "app_cmd.h"   /* 串口命令任务（串口控灯章节新增） */
+#include "app_dht11.h" /* DHT11 采集任务（DHT11 章节新增） */
+#include "app_mqtt.h"  /* WiFi-MQTT 上云任务（2.2 章节新增） */
 #include "cmsis_os.h"  /* FreeRTOS 的 CMSIS-RTOS V2 封装：osThreadNew 等 */
 #include "main.h"      /* 包含 stm32f4xx_hal.h，提供 Error_Handler 与 LED 引脚宏 */
 #include "task.h"      /* FreeRTOS 原生任务 API（TaskHandle_t 等） */
@@ -74,10 +79,46 @@ static const osThreadAttr_t s_app_cmd_task_attr = {
     .priority   = (osPriority_t)APP_UART1_TASK_PRIO, /* 数字越大优先级越高 */
 };
 #endif /* APP_UART1_ENABLE */
+
+#if APP_DHT11_ENABLE
+/* ========== DHT11 采集任务 ========== */
+
+/* 任务句柄：创建成功非 NULL、失败为 NULL（堆内存不足时） */
+static TaskHandle_t s_app_dht11_task_handle = NULL;
+
+/* 任务属性：名字 / 栈 / 优先级，数值全部来自 cfg 横切层 cfg_param.h。
+ * 栈 768 字节（比 LED 大、比串口小）：
+ *   - 比 LED 大：自检路径的函数调用深度深于普通采集
+ *   - 比串口小：不用 printf 格式化库，省掉那一截栈开销（见 app_dht11.c） */
+static const osThreadAttr_t s_app_dht11_task_attr = {
+    .name       = "app_dht11_task",
+    .stack_size = APP_DHT11_TASK_STACK_SIZE,         /* 栈大小（单位：字节！） */
+    .priority   = (osPriority_t)APP_DHT11_TASK_PRIO, /* 数字越大优先级越高 */
+};
+#endif /* APP_DHT11_ENABLE */
+
+#if APP_MQTT_ENABLE
+/* ========== WiFi-MQTT 上云任务 ========== */
+
+/* 任务句柄：创建成功非 NULL、失败为 NULL（堆内存不足时） */
+static TaskHandle_t s_app_mqtt_task_handle = NULL;
+
+/* 任务属性：名字 / 栈 / 优先级，数值全部来自 cfg 横切层 cfg_param.h。
+ * 栈给 2048（四个任务里最大）：
+ *   - 报文拼接路径最深：app_mqtt → mod_mqtt → mod_wifi → net_esp8266 → net_uart
+ *   - 局部变量里有 JSON 载荷与命令报文缓冲（各一百多字节）
+ *   - 解析路径要过 strstr / memcmp 这类库函数 */
+static const osThreadAttr_t s_app_mqtt_task_attr = {
+    .name       = "app_mqtt_task",
+    .stack_size = APP_MQTT_TASK_STACK_SIZE,         /* 栈大小（单位：字节！） */
+    .priority   = (osPriority_t)APP_MQTT_TASK_PRIO, /* 数字越大优先级越高 */
+};
+#endif /* APP_MQTT_ENABLE */
 #endif /* APP_TASK_ENABLE */
 
 /*----------------------------------------------------------------------------
- * 函数功能：创建全部用户任务（本例程创建 2 个：app_led_task + app_cmd_task）
+ * 函数功能：创建全部用户任务（本例程创建 3 个：
+ *           app_led_task + app_cmd_task + app_dht11_task）
  * 参数    ：无
  * 返回值  ：无
  * 调用处  ：Core/Src/freertos.c 的 MX_FREERTOS_Init()，在 osKernelStart() 之前
@@ -94,9 +135,12 @@ static const osThreadAttr_t s_app_cmd_task_attr = {
  *              比带着隐患继续跑更好定位
  *           ⑥ 新增任务时照抄这 3 步：定义句柄 → 定义属性 → osThreadNew，
  *              并确保新任务的 .c 文件已被 CMake 的 glob 收集到
- *           ⑦ 两个任务的优先级都是 1（平级）：同优先级按时间片轮转，
+ *           ⑦ 三个任务的优先级都是 1（平级）：同优先级按时间片轮转，
  *              谁先 osDelay 谁先让出 CPU，互不抢占——本例刻意不设高低之分，
- *              避免"串口一来数据就把闪烁节拍挤掉"这类隐性优先级问题
+ *              避免"串口一来数据就把闪烁节拍挤掉"这类隐性优先级问题。
+ *              ★ DHT11 任务也是 1：它虽然有关中断的 4~5 ms 关键段，
+ *                但那是"必须连续占用"的硬件时序，与优先级无关
+ *                （提优先级也挡不住别的任务被关中断前已经进来的那段）
  *           ⑧ ★ 本函数【永远存在】，但函数体受开关控制：
  *              APP_TASK_ENABLE = 0 时它是个空壳——什么任务都不建、直接返回；
  *              存在的唯一目的就是让 Core/Src/freertos.c 里那句调用永远能链接通过。
@@ -124,4 +168,27 @@ void app_taskCreate(void)
         Error_Handler();   /* 堆内存不足：停机保留现场 */
     }
 #endif /* APP_TASK_ENABLE && APP_UART1_ENABLE */
+
+#if APP_TASK_ENABLE && APP_DHT11_ENABLE
+    /* 创建 DHT11 采集任务：进入调度后由 app_dht11_task() 每 2 秒读一次。
+     * ★ 创建顺序放在串口之后：它要用 LED 的点灯接口（灯必须先被初始化），
+     *   也要用串口打印（串口链路先起来，启动自检的信息才不会丢）。 */
+    s_app_dht11_task_handle = osThreadNew(app_dht11_task, NULL, &s_app_dht11_task_attr);
+    if (s_app_dht11_task_handle == NULL)
+    {
+        Error_Handler();   /* 堆内存不足：停机保留现场 */
+    }
+#endif /* APP_TASK_ENABLE && APP_DHT11_ENABLE */
+
+#if APP_TASK_ENABLE && APP_MQTT_ENABLE
+    /* 创建上云任务：进入调度后由 app_mqtt_task() 先连网，再每 5 秒上报一次。
+     * ★ 创建顺序放在最后一个，理由是"它要读 DHT11 的快照"——
+     *   先让采集任务跑起来，第一条上报才不是空值。
+     *   这也是本工程四个任务的固定次序：LED → 串口 → DHT11 → MQTT。 */
+    s_app_mqtt_task_handle = osThreadNew(app_mqtt_task, NULL, &s_app_mqtt_task_attr);
+    if (s_app_mqtt_task_handle == NULL)
+    {
+        Error_Handler();   /* 堆内存不足：停机保留现场 */
+    }
+#endif /* APP_TASK_ENABLE && APP_MQTT_ENABLE */
 }

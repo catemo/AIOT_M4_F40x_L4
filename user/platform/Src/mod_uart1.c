@@ -28,27 +28,27 @@
  *----------------------------------------------------------------------------*/
 void MOD_UART1_Init(void)
 {
-    net_uart_init();      /* 网络层：启动 DMA 循环接收 + 打开 IDLE 中断 */
+    net_uart_init(NET_UART_DBG);      /* 网络层：启动 USART1 实例的 DMA 循环接收 + IDLE 中断 */
 }
 
 uint32_t MOD_UART1_Available(void)
 {
-    return net_uart_available();
+    return net_uart_available(NET_UART_DBG);
 }
 
 uint32_t MOD_UART1_Read(uint8_t *buf, uint32_t len)
 {
-    return net_uart_read(buf, len);
+    return net_uart_read(NET_UART_DBG, buf, len);
 }
 
 void MOD_UART1_Send(const uint8_t *buf, uint32_t len)
 {
-    net_uart_send(buf, len);
+    net_uart_send(NET_UART_DBG, buf, len);
 }
 
 void MOD_UART1_SendString(const char *str)
 {
-    net_uart_send_string(str);
+    net_uart_send_string(NET_UART_DBG, str);
 }
 
 #endif /* MOD_UART1_ENABLE */

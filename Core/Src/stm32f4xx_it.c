@@ -59,6 +59,8 @@
 /* External variables --------------------------------------------------------*/
 extern DMA_HandleTypeDef hdma_usart1_rx;
 extern UART_HandleTypeDef huart1;
+extern DMA_HandleTypeDef hdma_usart3_rx;
+extern UART_HandleTypeDef huart3;
 extern TIM_HandleTypeDef htim6;
 
 /* USER CODE BEGIN EV */
@@ -182,13 +184,38 @@ void USART1_IRQHandler(void)
   if (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_IDLE))
   {
       __HAL_UART_CLEAR_IDLEFLAG(&huart1);
-      net_uart_rx_idle_handler();   /* 网络层：判帧并把新到的字节搬进环形缓冲 */
+      net_uart_rx_idle_handler(NET_UART_DBG);   /* 网络层：判帧并把新到的字节搬进环形缓冲 */
   }
   /* USER CODE END USART1_IRQn 0 */
   HAL_UART_IRQHandler(&huart1);
   /* USER CODE BEGIN USART1_IRQn 1 */
 
   /* USER CODE END USART1_IRQn 1 */
+}
+
+/**
+  * @brief This function handles USART3 global interrupt.
+  */
+void USART3_IRQHandler(void)
+{
+  /* USER CODE BEGIN USART3_IRQn 0 */
+  /* ★ 与 USART1 完全同构：IDLE 判帧写在 HAL_UART_IRQHandler【之前】。
+   *   USART3 是 ESP8266 的 AT 通道，收到的永远是"混在一起的原始字节"——
+   *   AT 文本响应（OK / SEND OK / +IPD 头）与 MQTT 二进制载荷共用这一条线，
+   *   所以这里只让字节流层判帧搬数据，分流交给 net_esp8266 在任务上下文里做
+   *   （中断里做分流会拖长 ISR，也拿不到足够大的缓冲）。
+   *   ★ 本函数【永远存在】：net_uart_rx_idle_handler() 在关开关时是空壳，
+   *     调用点不删 —— 否则 CubeMX 重新生成代码就丢，链接期还会 undefined。 */
+  if (__HAL_UART_GET_FLAG(&huart3, UART_FLAG_IDLE))
+  {
+      __HAL_UART_CLEAR_IDLEFLAG(&huart3);
+      net_uart_rx_idle_handler(NET_UART_WIFI);   /* 网络层：USART3 实例判帧 */
+  }
+  /* USER CODE END USART3_IRQn 0 */
+  HAL_UART_IRQHandler(&huart3);
+  /* USER CODE BEGIN USART3_IRQn 1 */
+
+  /* USER CODE END USART3_IRQn 1 */
 }
 
 /**
@@ -203,6 +230,20 @@ void TIM6_DAC_IRQHandler(void)
   /* USER CODE BEGIN TIM6_DAC_IRQn 1 */
 
   /* USER CODE END TIM6_DAC_IRQn 1 */
+}
+
+/**
+  * @brief This function handles DMA1 stream1 global interrupt.
+  */
+void DMA1_Stream1_IRQHandler(void)
+{
+  /* USER CODE BEGIN DMA1_Stream1_IRQn 0 */
+
+  /* USER CODE END DMA1_Stream1_IRQn 0 */
+  HAL_DMA_IRQHandler(&hdma_usart3_rx);
+  /* USER CODE BEGIN DMA1_Stream1_IRQn 1 */
+
+  /* USER CODE END DMA1_Stream1_IRQn 1 */
 }
 
 /**

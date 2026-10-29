@@ -1,10 +1,13 @@
 /**
  ******************************************************************************
  * @file    per_gpio.c
- * @brief   感知层（perception）—— GPIO 驱动实现（LED1 = PG14）
+ * @brief   感知层（perception）—— GPIO 驱动实现（LED1 = PG14，LED2 = PG13）
  *
  *  本文件是 LED 链路里唯一直接操作 GPIO 寄存器的地方，上层全部通过
  *  per_gpio.h 里的函数来操作灯，换硬件只改这一个文件（确切说：s_led_hw[] 表）。
+ *
+ *  ★ DHT11 章节的扩灯只动了两个地方：s_led_hw[] 表加一行、init 里的引脚掩码
+ *    多一根——从 1 颗灯到 2 颗灯，四个对外动作一个字没改。
  *
  *  接口的完整说明（功能/参数/返回值/调用处/注意事项）写在 per_gpio.h，
  *  本文件的注释侧重"代码是怎么实现的"。
@@ -14,7 +17,7 @@
 #if PER_GPIO_ENABLE
 
 #include "per_gpio.h"
-#include "main.h"          /* 提供 LED1_Pin / LED1_GPIO_Port 与 HAL 头文件 */
+#include "main.h"          /* 提供 LED1_Pin / LED2_Pin / GPIO_Port 与 HAL 头文件 */
 
 /* ========== 硬件描述表（硬件抽象核心：换板子只改这里） ==========
  * 每颗灯一行：
@@ -34,7 +37,8 @@ typedef struct
 
 static const PER_GPIO_HW_t s_led_hw[PER_GPIO_LED_COUNT] =
 {
-    {LED1_GPIO_Port, LED1_Pin, 1},  /* LED1 = PG14，低电平点亮 */
+    {LED1_GPIO_Port, LED1_Pin, 1},  /* LED1 = PG14，低电平点亮（温度指示） */
+    {LED2_GPIO_Port, LED2_Pin, 1},  /* LED2 = PG13，低电平点亮（湿度指示） */
 };
 
 /* ========== 对外接口实现 ========== */
@@ -57,19 +61,28 @@ static const PER_GPIO_HW_t s_led_hw[PER_GPIO_LED_COUNT] =
 uint8_t per_gpio_init(void)
 {
     GPIO_InitTypeDef gpio = {0};
+    uint8_t i;
 
-    /* 使能 GPIO 时钟：LED1 挂在 GPIOG 上（这一步漏了，后面全部无效） */
+    /* 使能 GPIO 时钟：两颗灯都挂在 GPIOG 上（这一步漏了，后面全部无效） */
     __HAL_RCC_GPIOG_CLK_ENABLE();
 
-    /* 配置 GPIO 引脚为输出模式 */
-    gpio.Pin   = LED1_Pin;
+    /* ① 先把两颗灯的输出寄存器都写成"灭"，然后再切成输出态。
+     *    顺序刻意如此：引脚复位后 ODR 默认是 0，低电平点亮的灯
+     *    若先切输出、后写灭电平，配置那一下会"啪"地亮一瞬。
+     *    这里的翻译与 per_gpio_write() 完全一致（灭 = !active_low），
+     *    改动其中一处时另一处要跟着改。 */
+    for (i = 0U; i < PER_GPIO_LED_COUNT; i++)
+    {
+        HAL_GPIO_WritePin(s_led_hw[i].port, s_led_hw[i].pin,
+                          (s_led_hw[i].active_low != 0U) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+    }
+
+    /* ② 一次性把两颗灯配成推挽输出：同端口可合并成一次 HAL_GPIO_Init */
+    gpio.Pin   = LED1_Pin | LED2_Pin;
     gpio.Mode  = GPIO_MODE_OUTPUT_PP;   /* 推挽输出：能主动输出高、也能主动拉低 */
     gpio.Pull  = GPIO_NOPULL;           /* 无上下拉：点灯是强驱动，不需要内部电阻 */
     gpio.Speed = GPIO_SPEED_FREQ_LOW;   /* 低速：点灯不需要高速翻转，低速可减小干扰 */
-    HAL_GPIO_Init(LED1_GPIO_Port, &gpio);
-
-    /* 初始化为熄灭状态：低电平点亮 → 灭 = 高电平(SET) */
-    HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_SET);  /* 高电平熄灭 */
+    HAL_GPIO_Init(GPIOG, &gpio);
 
     return PER_GPIO_LED_OK;
 }

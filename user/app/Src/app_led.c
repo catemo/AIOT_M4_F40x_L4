@@ -83,9 +83,10 @@ void app_led_task(void *argument)
     /* 无限循环，任务主体 */
     for (;;)
     {
+ #if APP_LED_TASK_ENABLE       
         /* 推进闪烁状态机：数 1 个毫秒 */
         APP_BLINK_process();
-
+#endif
         /* 延时 1ms：既是让出 CPU，也是状态机的节拍
          * FreeRTOSConfig.h 里节拍为 1000Hz，所以 osDelay(1) 正好是 1ms */
         osDelay(APP_BLINK_TICK_MS);
