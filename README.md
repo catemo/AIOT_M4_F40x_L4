@@ -1066,4 +1066,4 @@ void USART3_IRQHandler(void)        /* 2.2 章节新增，逐字对称 */
 
 本项目 `user/` 下的用户代码采用 [MIT 许可证](LICENSE)。
 
-> 两点说明：`Drivers/`（STM32 HAL 库）、`Middlewares/`（FreeRTOS）等目录中的第三方代码遵循其各自原有的许可证，不在 MIT 许可范围内；本工程目前未附带 `LICENSE` 文本文件，需要时可直接使用 `src/refer/` 下的同名文件。
+> 两点说明：`Drivers/`（STM32 HAL 库）、`Middlewares/`（FreeRTOS）等目录中的第三方代码遵循其各自原有的许可证，不在 MIT 许可范围内；本工程根目录已附带 `LICENSE` 文本文件（MIT 全文）。
