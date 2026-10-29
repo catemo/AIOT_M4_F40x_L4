@@ -37,8 +37,8 @@
 #error "APP_LED_ENABLE requires APP_BLINK_ENABLE"  /* 业务要靠闪烁状态机干活，两者必须同开 */
 #endif
 
-#if APP_TASK_ENABLE && !APP_LED_ENABLE && !APP_UART1_ENABLE && !APP_DHT11_ENABLE && !APP_MQTT_ENABLE
-#error "APP_TASK_ENABLE requires APP_LED_ENABLE or APP_UART1_ENABLE or APP_DHT11_ENABLE or APP_MQTT_ENABLE"   /* 至少要有一个任务可建，否则排班表是空的 */
+#if APP_TASK_ENABLE && !APP_LED_ENABLE && !APP_UART1_ENABLE && !APP_DHT11_ENABLE && !APP_MQTT_ENABLE && !APP_LOGGER_ENABLE
+#error "APP_TASK_ENABLE requires APP_LED_ENABLE or APP_UART1_ENABLE or APP_DHT11_ENABLE or APP_MQTT_ENABLE or APP_LOGGER_ENABLE"   /* 至少要有一个任务可建，否则排班表是空的 */
 #endif
 
 /* ==========================================================================
@@ -274,6 +274,74 @@
  *   云端匹配不上，控制台永远停在"等待响应"，而串口日志什么都看不出来。 */
 #if MOD_MQTT_ENABLE && (MOD_MQTT_TOPIC_MAX < 108)
 #error "MOD_MQTT_TOPIC_MAX requires >= 108 (fixed part 60 + request_id 47 + NUL)"
+#endif
+
+/* ==========================================================================
+ *  九、存储链依赖校验（2.3 新增，4 条 + 2 条跨链）
+ *  两条新链与串口链同构：app → platform → network。
+ *  ★ 总闸写法不同（NET_I2C_/NET_SPI_ENABLE 直接当总闸），所以这里的闸门
+ *    不是摆设：就算哪天有人把子开关改成独立数值，依赖关系仍会被拦下。
+ * ========================================================================== */
+
+/* ① 业务只许经平台层碰总线：越过 mod_eeprom/mod_flash 直接调 net_*，
+ *    "换器件只改平台层"的余地就全丢了 */
+#if APP_PARAM_ENABLE && !MOD_EEPROM_ENABLE
+#error "APP_PARAM_ENABLE requires MOD_EEPROM_ENABLE"   /* 参数业务只认平台层的器件语义 */
+#endif
+#if APP_LOGGER_ENABLE && !MOD_FLASH_ENABLE
+#error "APP_LOGGER_ENABLE requires MOD_FLASH_ENABLE"   /* 日志业务只认平台层的指令集 */
+#endif
+
+/* ② 平台层要有总线后端 */
+#if MOD_EEPROM_ENABLE && !NET_I2C_ENABLE
+#error "MOD_EEPROM_ENABLE requires NET_I2C_ENABLE"     /* 器件语义没有总线可落 */
+#endif
+#if MOD_FLASH_ENABLE && !NET_SPI_ENABLE
+#error "MOD_FLASH_ENABLE requires NET_SPI_ENABLE"      /* 指令集没有 SPI 包络可发 */
+#endif
+
+/* ③ 打印要走串口链的平台层入口（与 app_dht11 同一条规矩） */
+#if (APP_PARAM_ENABLE || APP_LOGGER_ENABLE) && !MOD_UART1_ENABLE
+#error "storage chain requires MOD_UART1_ENABLE (its log lines go through MOD_UART1_SendString)"
+#endif
+
+/* ④ 日志的取材是 DHT11 快照（跨链依赖，漏配要到链接期才炸，必须编译期拦下） */
+#if APP_LOGGER_ENABLE && !APP_DHT11_ENABLE
+#error "APP_LOGGER_ENABLE requires APP_DHT11_ENABLE (log records come from the DHT11 snapshot)"
+#endif
+
+/* ==========================================================================
+ *  十、存储链参数体检（2.3 新增，5 条）
+ * ========================================================================== */
+
+/* 容量闸门：AT24C02 一共 256 字节，配置块放不下就是配置错误，
+ * 编译期就拦——否则运行期写越界会把 EEPROM 后半段悄悄写花 */
+#if APP_PARAM_ENABLE && ((APP_PARAM_CFG_OFFSET + APP_PARAM_CFG_SIZE) > AT24C02_SIZE_BYTES)
+#error "APP_PARAM_CFG_OFFSET + APP_PARAM_CFG_SIZE exceeds AT24C02 capacity (256 B)"
+#endif
+
+/* 栈闸门：页编程缓冲(260 B) + 记录缓冲 + 拼行打印都在栈上 */
+#if (APP_PARAM_ENABLE || APP_LOGGER_ENABLE) && (APP_STORAGE_TASK_STACK_SIZE < 2048)
+#error "APP_STORAGE_TASK_STACK_SIZE requires >= 2048 (unit: BYTES! page-program buffer + record + print line)"
+#endif
+
+/* 基础节拍下限：存储任务每拍要睡够，0 会吃满 CPU */
+#if (APP_PARAM_ENABLE || APP_LOGGER_ENABLE) && (APP_STORAGE_TICK_MS < 1)
+#error "APP_STORAGE_TICK_MS requires >= 1"
+#endif
+
+/* 两个周期都必须是基础节拍的整数倍：否则实际读回/追加的间隔会与设定值偏差 */
+#if APP_PARAM_ENABLE && ((APP_PARAM_READBACK_MS % APP_STORAGE_TICK_MS) != 0)
+#error "APP_PARAM_READBACK_MS requires an integer multiple of APP_STORAGE_TICK_MS"
+#endif
+#if APP_LOGGER_ENABLE && ((APP_LOGGER_PERIOD_MS % APP_STORAGE_TICK_MS) != 0)
+#error "APP_LOGGER_PERIOD_MS requires an integer multiple of APP_STORAGE_TICK_MS"
+#endif
+
+/* 追加周期下限：一次追加最坏 = 擦扇区 400 ms + 页编程 + 读回比对，
+ * 周期太短会把存储任务自己拍满，还挤占同拍的上云上报 */
+#if APP_LOGGER_ENABLE && (APP_LOGGER_PERIOD_MS < 1000)
+#error "APP_LOGGER_PERIOD_MS requires >= 1000 (worst append = sector erase 400 ms + program + verify)"
 #endif
 
 #endif /* CFG_CHECK_H */

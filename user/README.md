@@ -1,4 +1,4 @@
-# user/ —— 四层源码架构（串口控灯 + DHT11 联动 + WiFi-MQTT 上云版）
+# user/ —— 四层源码架构（串口控灯 + DHT11 联动 + WiFi-MQTT 上云 + EEPROM/FLASH 存储版）
 
 本工程为**四层框架**：应用层 app、平台层 platform、网络层 network、感知层 perception。
 这四层同时回答两个问题：**讲责任**（问题出在哪一层、找谁）和**写代码**（文件放哪个目录、谁可以调谁）。
@@ -9,16 +9,20 @@
 user/
 ├── app/            应用层：业务规则、命令解析、阈值判定、上报节拍、任务编排
 │   ├── Inc/  Src/  app_led（闪烁业务）/ app_blink（闪烁状态机）
-│                   app_cmd（串口命令）/ app_task（任务创建）
+│                   app_cmd（串口命令）/ app_task（任务创建，共 5 个）
 │                   app_dht11（周期采集 + 快照）/ app_link（阈值联动）
 │                   app_mqtt（连接分段 / 周期上报 / 云端命令响应）
-├── platform/       平台层：命令协议与统一入口
+│                   app_param（20 字节配置块：三关校验 + 读回）/ app_logger（8 B 环形日志）
+├── platform/       平台层：命令协议与统一入口、存储器件语义
 │   ├── Inc/  Src/  mod_uart1（串口入口）/ mod_wifi（连网语义动作）
 │                   mod_mqtt（四种报文 + 剩余长度编码 + 报文 ID）
-├── network/        网络层：字节流与 AT 会话
+│                   mod_eeprom（AT24C02：页拆分 + 写周期轮询）/ mod_flash（W25Q64：指令集 + 先擦后写）
+├── network/        网络层：字节流、AT 会话、存储总线
 │   ├── Inc/  Src/  net_uart（DMA + IDLE + 环形缓冲，★ 实例表管 2 个串口）
 │                   net_esp8266（AT 文本会话 + +IPD 二进制分流）
-├── perception/     感知层：引脚表与时序（★ 上云章节零新增）
+│                   net_i2c（I2C1 时序：地址帧/ACK/超时/九时钟卡死恢复）
+│                   net_spi（SPI1 全双工 + 片选包络）
+├── perception/     感知层：引脚表与时序（★ 上云与存储章节零新增）
 │   ├── Inc/  Src/  per_gpio（灯引脚表）/ per_led（编号门卫）
 │                   per_delay（TIM2 微秒底座）/ per_dht11（单总线协议翻译）
 ├── cfg/            横切：module_cfg.h 总开关（纯头文件，只放开关与参数）
@@ -40,6 +44,12 @@ DHT11 链（两跳）  app_dht11 → PER_DHT11_* → per_delay_* → HAL
 上云链（五跳）    app_mqtt → MOD_MQTT_* → MOD_WIFI_* → net_esp8266_* → net_uart(USART3) → HAL
                   ①app      ②platform    ②platform   ③network        ③network
 
+参数链（三跳，2.3） app_param → mod_eeprom → net_i2c(I2C1: PB8/PB9) → HAL
+                  ①app        ②platform     ③network
+
+日志链（三跳，2.3） app_logger → mod_flash → net_spi(SPI1: PB3/4/5 + PG10) → HAL
+                  ①app         ②platform    ③network
+
   合流点① APP_BLINK_*（同在 ①app 层）
       串口命令与自动闪烁在此汇合：命令先让灯"退出闪烁"再点灯 —— 手动与闪烁绝不抢同一颗灯。
 
@@ -53,10 +63,13 @@ DHT11 链（两跳）  app_dht11 → PER_DHT11_* → per_delay_* → HAL
              上云链  → LED 链（借 APP_BLINK/PER_LED 点灯）
              上云链  → DHT11 链（只读快照，可选）
              上云链  → 串口链（借 MOD_UART1_* 打日志）
-    LED 链是四条里最底的一条 —— 所以"一键断 LED 链"在本工程【不成立】。
+             参数链  → 串口链（借 MOD_UART1_* 打日志）
+             日志链  → 串口链（借 MOD_UART1_* 打日志）
+             日志链  → DHT11 链（读快照，闸门强制）
+    LED 链是六条里最底的一条 —— 所以"一键断 LED 链"在本工程【不成立】。
 ```
 
-**四条链为什么层数不同**：层要有自己的知识才配单独存在。
+**六条链为什么层数不同**：层要有自己的知识才配单独存在。
 
 | 链 | 层数 | 各层的知识 |
 |---|---|---|
@@ -64,6 +77,8 @@ DHT11 链（两跳）  app_dht11 → PER_DHT11_* → per_delay_* → HAL
 | LED | 2 | 引脚表 + 门卫（perception）/ 闪烁节奏 + 业务（app） |
 | DHT11 | 2 | 单总线协议翻译 + 微秒底座（perception）/ 周期 + 阈值语义（app） |
 | 上云 | **5** | AT 会话（network）/ 连网语义（platform）/ 报文格式（platform）/ 报什么（app） |
+| 参数 | 3 | I2C 时序 + 卡死恢复（network）/ 页与写周期（platform）/ 配置块 + 三关校验（app） |
+| 日志 | 3 | SPI 包络（network）/ W25Q 指令集（platform）/ 分区 + 环形决策（app） |
 
 DHT11 中间没有第三种知识，硬塞一个 `mod_dht11` 只会多出几十行纯转发。
 上云恰恰相反：它有四种互不重叠的知识，所以**平台层与网络层各两跳**不是冗余，而是必然——
@@ -141,11 +156,13 @@ ISR 里只做"判帧 + 搬数据"这一件事：**不解析、不打印、不调
 ## 接入构建
 
 `CMakeLists.txt` 用 `file(GLOB)` 分四层收编 `user/*/Src/*.c` 与 `common/*.c`，并加入六个 Inc 头路径；
-`cmake/stm32cubemx/CMakeLists.txt` 里还要登记 CubeMX 生成的 `usart.c` / `dma.c` / `tim.c` 与 `stm32f4xx_hal_uart.c`。
+`cmake/stm32cubemx/CMakeLists.txt` 里还要登记 CubeMX 生成的 `usart.c` / `dma.c` / `tim.c` / `i2c.c` / `spi.c`
+与 `stm32f4xx_hal_uart.c` / `stm32f4xx_hal_i2c.c` / `stm32f4xx_hal_spi.c`。
 
-> ⚠ **cfg 的两级开关管不到 Core 层**：`usart.c` / `dma.c` / `tim.c` / `gpio.c` 由 glob 一律参与编译，
-> 把四条链全关掉，它们与 `HAL_UART_Init` 依然在 .elf 里（已用 `nm` 验证）。
+> ⚠ **cfg 的两级开关管不到 Core 层**：`usart.c` / `dma.c` / `tim.c` / `gpio.c` / `i2c.c` / `spi.c` 由 CMake
+> 显式清单参与编译，把链全关掉，它们与 `HAL_UART_Init` / `HAL_I2C_Init` 依然在 .elf 里（已用 `nm` 验证）。
 > 想省这部分体积得去 `.ioc` 里删外设重新生成。
 
 详见课件《1.3 项目实操-构架搭建与分层与 LED 灯控制》《1.4 项目实操-DHT11 传感器与 LED 灯联动》
-《2.2 项目实操-WiFi-MQTT 上云》，以及 `docs/tutorials/t02`、`t03`、`t04`。
+《2.2 项目实操-WiFi-MQTT 上云》《2.3 项目实操-外部存储器 EEPROM/FLASH》，
+以及 `docs/tutorials/t02`、`t03`、`t04` 与 `docs/teaching/2.3-外部存储器例程开发文档.md`。

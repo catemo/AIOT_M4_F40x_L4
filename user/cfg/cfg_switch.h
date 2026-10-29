@@ -85,6 +85,28 @@
 #define MOD_MQTT_ENABLE       (MOD_WIFI_ENABLE && 1)   /* ② 平台层 mod_mqtt.c  —— 四种报文 + 剩余长度编码 */
 #define APP_MQTT_ENABLE       (MOD_WIFI_ENABLE && 1)   /* ① 应用层 app_mqtt.c  —— 连接分段 / 周期上报 / 命令响应 */
 
+/* ---------- 存储链·参数（EEPROM AT24C02：I2C1，PB8=SCL / PB9=SDA） ----------
+ * 四层的参数链有三跳（app → platform → network），与串口链同构：
+ *   app_param     存什么：20 字节配置块（阈值/校准/重启计数）+ 三关校验
+ *   mod_eeprom    器件语义：8 B 页跨页拆分 + 写周期轮询 ACK
+ *   net_i2c       总线时序：地址帧/ACK/超时/总线卡死九时钟恢复
+ * 开关写法与既有链略有不同：总闸就是总线开关 NET_I2C_ENABLE，平台层与应用层
+ * 直接挂在其下——这条链不存在"只有应用没有总线"的中间态，让 #if 表达式
+ * 自己把依赖写出来，比再多造一个总闸名字更直白（闸门在 cfg_check.h 复核）。 */
+#define NET_I2C_ENABLE      1   /* 参数链总开关：I2C1 总线（PB8/PB9，400 kHz Fast Mode） */
+#define MOD_EEPROM_ENABLE   (NET_I2C_ENABLE)    /* 平台层 mod_eeprom.c —— 器件语义：页、写周期、容量 */
+#define APP_PARAM_ENABLE    (MOD_EEPROM_ENABLE) /* 应用层 app_param.c —— 20 字节配置块：存什么/多久读回 */
+
+/* ---------- 存储链·日志（FLASH W25Q64：SPI1，PB3/PB4/PB5 + PG10 片选） ----------
+ * 四层的日志链同样三跳（app → platform → network）：
+ *   app_logger    记什么：8 字节环形日志（DHT11 快照），写满擦最旧
+ *   mod_flash     器件语义：W25Q 指令集 + WREN + 先擦后写 + 忙等待
+ *   net_spi       总线时序：全双工交换 + 片选包络（一条指令一个包络）
+ * 总闸同上 = 总线开关 NET_SPI_ENABLE。 */
+#define NET_SPI_ENABLE      1   /* 日志链总开关：SPI1 总线（PB3/PB4/PB5，10.5 MHz + PG10） */
+#define MOD_FLASH_ENABLE    (NET_SPI_ENABLE)    /* 平台层 mod_flash.c —— 指令集：WREN/擦/编程/读 */
+#define APP_LOGGER_ENABLE   (MOD_FLASH_ENABLE)  /* 应用层 app_logger.c —— 环形日志：断电接着写 */
+
 /* ---------- 任务集中创建（不属于某条链，单独一个开关） ---------- */
 #define APP_TASK_ENABLE     1   /* 应用层 app_task.c —— 所有应用任务的"排班表" */
 
@@ -104,8 +126,10 @@
  *     DHT11 链 ─借 MOD_UART1_* 打印──> 串口链
  *     上云链   ─借 APP_BLINK/PER_LED 点灯─> LED 链
  *     上云链   ─读 DHT11 快照（可选）──> DHT11 链
- *
- *    LED 链是四条里最底的一条：串口命令要经它的状态机点灯，DHT11 联动与
+ *     存储链·参数 ─借 MOD_UART1_* 打印─> 串口链
+ *     存储链·日志 ─借 MOD_UART1_* 打印─> 串口链
+ *     存储链·日志 ─借 APP_DHT11_* 取快照─> DHT11 链（闸门看着）
+ *     LED 链是四条里最底的一条：串口命令要经它的状态机点灯，DHT11 联动与
  *    云端命令要经它的感知层点灯。★ 所以"一键断 LED 链"在本工程【不成立】——
  *    MOD_LED_ENABLE 改 0 会同时撞上两条闸门：
  *        APP_UART1_ENABLE requires APP_BLINK_ENABLE

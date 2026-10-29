@@ -15,10 +15,13 @@
 > 把「四层怎么分、不定长帧怎么收、单总线时序怎么守、AT 会话与 MQTT 报文怎么落到四层里、配置怎么收口、三个控灯来源怎么不打架」讲透。
 >
 > 演进：纯闪烁 `v2.1b`（15 文件 / 1091 行）→ 加串口（21 文件 / 2267 行）→ 加 DHT11（29 文件 / 3677 行）
-> → 加 WiFi-MQTT 上云（**37 文件 / 6639 行**，另有横切 `common/` 3 文件 / 127 行）。
-> 本次上云章节新增 **8 个文件 / 2563 行**，并把 `net_uart` 从"单实例"改成**实例表**（一条代码管两个串口）。
+> → 加 WiFi-MQTT 上云（37 文件 / 6639 行）→ 加外部存储器 EEPROM/FLASH（**50 文件 / 9730 行**，
+> 另有横切 `common/` 3 文件 / 127 行）。
+> 2.2 上云章节新增 8 个文件 / 2563 行；2.3 存储章节新增 **12 个文件 / 2146 行**，
+> 并把 `net_uart` 从"单实例"改成**实例表**（一条代码管两个串口）。
 >
-> 最终形态：**四条链 · 两个合流点** —— LED 链（两跳）、串口链（三跳）、DHT11 链（两跳）、上云链（五跳）。
+> 最终形态：**六条链 · 两个合流点** —— LED 链（两跳）、串口链（三跳）、DHT11 链（两跳）、上云链（五跳）、
+> 参数链（三跳：AT24C02）、日志链（三跳：W25Q64）。
 > 本工程是培训课件《1.3 项目实操-构架搭建与分层与 LED 灯控制》《1.4 项目实操-DHT11 传感器与 LED 灯联动》
 > 与《2.2 项目实操-WiFi-MQTT 上云》的配套源码。
 
@@ -35,7 +38,7 @@
 - [目录结构](#目录结构)
 - [改配置：只动 cfg 一个目录](#改配置只动-cfg-一个目录)
 - [四层架构一览](#四层架构一览)
-- [用户代码清单](#用户代码清单37-个文件--6639-行)
+- [用户代码清单](#用户代码清单50-个文件--9730-行)
 - [设计要点](#设计要点)
 - [资源占用](#资源占用)
 - [文档](#文档)
@@ -240,7 +243,7 @@ STM32_Programmer_CLI -c port=SWD -w build/Debug/IOT_M4_L4.hex -v -rst
 
 ```text
 IOT_M4_L4/
-├── user/                       ★ 用户代码：四层架构（37 文件 / 6639 行）
+├── user/                       ★ 用户代码：四层架构（50 文件 / 9730 行）
 │   ├── app/Inc, Src/           ① 应用层    app_led（闪烁业务）/ app_blink（状态机）
 │   │                                      app_cmd（命令解析）/ app_task（任务创建）
 │   │                                      app_dht11（周期采集）/ app_link（阈值联动）
@@ -459,24 +462,24 @@ PC 发 "LED1 ON\n"
             ├─ osThreadNew(app_led_task,   …)   灯：初始化引脚 + 设 1Hz
             ├─ osThreadNew(app_cmd_task,   …)   串口：拉起 DMA 接收 + 快闪 3 次自检
             ├─ osThreadNew(app_dht11_task, …)   传感器：自检 → 稳定 1s → 每 2s 采集
-            └─ osThreadNew(app_mqtt_task,  …)   上云：AT 测活 → 连 AP → 建 TCP → MQTT → 订阅
-  → osKernelStart()  →  调度器接管  →  四个任务各自跑起来
+            └─ osThreadNew(app_storage_task,…) 存储：EEPROM 读回 3s + W25Q64 日志 5s
+  → osKernelStart()  →  调度器接管  →  五个任务各自跑起来
 ```
 
 ---
 
-## 用户代码清单（37 个文件 / 6639 行）
+## 用户代码清单（50 个文件 / 9730 行）
 
 > 行数含契约式注释；去掉注释后的代码量约为其三分之一。
 > 口径：`user/` 下除 `common/` 外的 .c/.h，由 `docs/check_stats.py` 逐行核对。
 
 | 层 | 文件 | 行数 | 说明 |
 |---|---|---|---|
-| ※ cfg | `module_cfg.h` | 66 | 总入口，只做按序包含 + 四条链的链路表 |
-| ※ cfg | `cfg_switch.h` | 195 | 两级开关（22 个）+ 九个裁剪场景说明 |
-| ※ cfg | `cfg_print.h` | 45 | 打印总闸（业务回复直出，保持 0） |
-| ※ cfg | `cfg_param.h` | 168 | 32 个参数 + 栈单位与缓冲大小说明 |
-| ※ cfg | `cfg_check.h` | 276 | 18 条依赖校验 + 21 条参数体检 |
+| ※ cfg | `module_cfg.h` | 73 | 总入口，只做按序包含 + 六条链的链路表 |
+| ※ cfg | `cfg_switch.h` | 219 | 两级开关（28 个）+ 九个裁剪场景说明 |
+| ※ cfg | `cfg_print.h` | 48 | 打印总闸（业务回复直出，保持 0） |
+| ※ cfg | `cfg_param.h` | 232 | 59 个参数 + 栈单位与缓冲大小说明 |
+| ※ cfg | `cfg_check.h` | 347 | 24 条依赖校验 + 27 条参数体检 |
 | ④ perception | `Inc/per_gpio.h` | 108 | 接口契约：枚举（2 颗灯）+ 四个动作声明 |
 | ④ perception | `Src/per_gpio.c` | 178 | `s_led_hw[]` 表（2 项）+ init / write / is_on / toggle |
 | ④ perception | `Inc/per_led.h` | 111 | 接口契约（门卫，2 颗灯） |
@@ -489,27 +492,40 @@ PC 发 "LED1 ON\n"
 | ③ network | `Src/net_uart.c` | 302 | 实例表（2 项）+ DMA 循环 + IDLE 判帧 + ringbuf + 错误自愈 |
 | ③ network | `Inc/net_esp8266.h` | 202 | AT 会话接口（12 个）+ 返回码 + 超时表说明 |
 | ③ network | `Src/net_esp8266.c` | 586 | AT 命令拼接与等待 + `+IPD` 四步分流 + 两段缓冲 + 断线判定 |
+| ③ network | `Inc/net_i2c.h` | 102 | I2C1 总线接口：动词四件 + 返回码四态 |
+| ③ network | `Src/net_i2c.c` | 229 | HAL 事务映射 + BUSY/TIMEOUT 自救重试 + 九时钟总线恢复 |
+| ③ network | `Inc/net_spi.h` | 43 | SPI1 总线接口：一次 transfer = 一个片选包络 |
+| ③ network | `Src/net_spi.c` | 53 | 全双工交换 + F_CS 包络（成败都先释放片选） |
 | ② platform | `Inc/mod_uart1.h` | 76 | 接口契约（统一入口） |
-| ② platform | `Src/mod_uart1.c` | 54 | 五个函数，各一行转发（带 `NET_UART_DBG`） |
+| ② platform | `Src/mod_uart1.c` | 104 | 五个函数，各一行转发（带 `NET_UART_DBG`） |
 | ② platform | `Inc/mod_wifi.h` | 145 | 连网语义接口（11 个）+ `MOD_WIFI_Status_t` |
 | ② platform | `Src/mod_wifi.c` | 116 | 状态归一 + 建链后切 MQTT 模式 + 收帧切片 |
 | ② platform | `Inc/mod_mqtt.h` | 162 | 报文接口（8 个）+ `MOD_MQTT_Msg_t` 结构体 |
 | ② platform | `Src/mod_mqtt.c` | 565 | 剩余长度变长编码 + 四种报文 + 报文 ID 会话 + PUBACK |
+| ② platform | `Inc/mod_eeprom.h` | 110 | AT24C02 器件语义接口 + 三态返回码 |
+| ② platform | `Src/mod_eeprom.c` | 274 | 8 B 页写自动拆分 + 写周期轮询 ACK + 容量卡死 |
+| ② platform | `Inc/mod_flash.h` | 132 | W25Q64 指令集接口 + JEDEC 期望值 + 六态返回码 |
+| ② platform | `Src/mod_flash.c` | 340 | WREN+WEL 回读 / 先擦后写一条龙 / 分块读回比对 |
 | ① app | `Inc/app_blink.h` | 124 | 接口契约（状态机，含 On/Off/IsOn） |
 | ① app | `Src/app_blink.c` | 186 | 闪烁状态机 + 手动接管 |
 | ① app | `Inc/app_led.h` | 53 | 接口契约 |
 | ① app | `Src/app_led.c` | 96 | 闪烁业务 |
 | ① app | `Inc/app_cmd.h` | 50 | 接口契约（串口命令） |
-| ① app | `Src/app_cmd.c` | 242 | 命令解析 + 回显 + 上电自检快闪 |
+| ① app | `Src/app_cmd.c` | 756 | 命令解析 + 回显 + 自检快闪 + **TH 命令写 EEPROM** |
 | ① app | `Inc/app_dht11.h` | 78 | DHT11 采集任务接口 + `APP_DHT11_Snapshot_t`（快照） |
 | ① app | `Src/app_dht11.c` | 293 | 周期读 + 重试 + 写快照 + 自己拼串输出（不引 printf） |
 | ① app | `Inc/app_link.h` | 71 | 阈值联动接口（温度→LED1、湿度→LED2） |
-| ① app | `Src/app_link.c` | 113 | 边沿触发：只在跨阈值那一帧写灯 |
-| ① app | `Inc/app_mqtt.h` | 78 | 上云接口 + **8 个用户配置宏**（SSID / 三元组 / 物模型） |
-| ① app | `Src/app_mqtt.c` | 709 | 六段连接 + 退避重连 + 周期上报 + 离线缓存 + 命令响应 |
-| ① app | `Inc/app_task.h` | 52 | 接口契约（四个任务） |
-| ① app | `Src/app_task.c` | 194 | 四个任务集中创建 |
-| — | **合计** | **6639** | |
+| ① app | `Src/app_link.c` | 146 | 边沿触发 + **阈值运行时读配置块（回落宏值）** |
+| ① app | `Inc/app_mqtt.h` | 92 | 上云接口 + 8 个用户配置宏（`__has_include` 探测密钥头） |
+| ① app | `Src/app_mqtt.c` | 710 | 六段连接 + 退避重连 + 周期上报 + 离线缓存 + 命令响应 |
+| ① app | `Inc/app_param.h` | 112 | 20 字节配置块（pack(1)+static_assert）+ 存储任务接口 |
+| ① app | `Src/app_param.c` | 458 | 加载五步 + CRC16-CCITT + 读回任务 + 阈值读写 |
+| ① app | `Inc/app_logger.h` | 81 | 8 字节环形日志记录 + 分区常量 |
+| ① app | `Src/app_logger.c` | 335 | 扫描找空位断电续写 + 写满擦最旧 + 读 0 即最新 |
+| ① app | `Inc/app_mqtt_secret.h` | 26 | 本机密钥（git 忽略；仓库内只有 `.template`） |
+| ① app | `Inc/app_task.h` | 52 | 接口契约（五个任务） |
+| ① app | `Src/app_task.c` | 222 | 五个任务集中创建（存储任务驱动两条链） |
+| — | **合计** | **9730** | |
 
 另有：
 
@@ -518,12 +534,15 @@ PC 发 "LED1 ON\n"
 - **Core 挂载点与 MX 改动**：见下节。
 
 > 四章的规模演进：**15 文件 / 1091 行**（纯闪烁）→ **21 文件 / 2267 行**（加串口）
-> → **29 文件 / 3677 行**（加 DHT11）→ **37 文件 / 6639 行**（加上云）；横切 common 三段始终 127 行未变。
+> → **29 文件 / 3677 行**（加 DHT11）→ **37 文件 / 6639 行**（加上云）
+> → **50 文件 / 9730 行**（加外部存储器）；横切 common 三段始终 127 行未变。
 >
-> 上云章节的 8 个新文件（2563 行）分别是：`net_esp8266.h/.c`（202/586）、`mod_wifi.h/.c`（145/116）、
-> `mod_mqtt.h/.c`（162/565）、`app_mqtt.h/.c`（78/709）；
-> 另有一批既有文件被扩写共 386 行：`net_uart.h/.c` +27/+96（实例表）、`app_dht11.h/.c` +33/+30（快照）、
-> `app_task.c` +31（第四个任务）、cfg 四件 +168（开关 / 参数 / 闸门 / 链路表）、`app_led.c` +1。
+> 2.3 存储章节的 12 个新文件（2146 行）分别是：
+> `net_i2c.h/.c`（84/213）、`net_spi.h/.c`（43/53）、`mod_eeprom.h/.c`（63/114）、`mod_flash.h/.c`（109/294）、
+> `app_param.h/.c`（112/432）、`app_logger.h/.c`（81/335）；
+> 另有 `app_mqtt_secret.h`（26，2.2 章节的凭证分离产物，git 忽略）。
+> 扩写的既有文件：`app_cmd.c` +93（TH 命令）、`app_link.c` +33（运行时阈值）、`app_task.c` +28（第五个任务）、
+> cfg 四件 +212（六开关 / 20 参数 / 12 闸门 / 链路表）、`app_mqtt.h` +14、`module_cfg.h` +7。
 
 ---
 
@@ -822,7 +841,7 @@ if (snap.valid == 0U) { /* 还没采到过：如实说"没数据"，不编一个
 | tutorials | [t03 · 从零给工程接 DHT11 与阈值联动](docs/tutorials/t03-从零给工程接DHT11与阈值联动.md) | Step 0~9 手写顺序 + **三板斧**（看 stage / 看自检行 / 确认物理条件）+ 5 道练习 |
 | tutorials | [t02 · 从零给工程接串口控灯](docs/tutorials/t02-从零给工程接串口控灯.md) | 前置：Step 0~9 接 USART1，每步含"目标 / 做法 / 自检" |
 | tutorials | [t01 · 从零搭建四层 LED 闪烁](docs/tutorials/t01-从零搭建四层LED闪烁.md) | 再前置：先会闪灯 |
-| reference | [引脚与符号速查表](docs/reference/引脚与符号速查表.md) | 引脚 / 时基 / 37 个文件 / 76 个函数 / 四条链 / 命令表 + DHT11 与 MQTT 输出 / 宏与枚举 / 多档体积 / 排障速查 |
+| reference | [引脚与符号速查表](docs/reference/引脚与符号速查表.md) | 引脚 / 时基 / 50 个文件 / 105 个函数 / 六条链 / 命令表 + DHT11、MQTT 与存储输出 / 宏与枚举 / 多档体积 / 排障速查 |
 | test | [05 · WiFi-MQTT 上云链测试文档与用例](docs/test/05-WiFi-MQTT链-测试文档和用例.md) | 五层分层用例 + 集成 6 条 + 11 条闸门 + **多档裁剪态（已实测）** + 健康度清单 |
 | test | [04 · DHT11 链测试文档与用例](docs/test/04-DHT11链-测试文档和用例.md) | 四组分层用例 + 12 条闸门 + **7 档裁剪态 + 3 个反向用例**（均已实测） |
 | test | [03 · 上板实测操作卡](docs/test/03-上板实测操作卡.md) | **照做清单**：接线 → 烧录 → 快闪自检 → 五条命令 → **Step 9+ DHT11 三动作（捏热/哈气/拔线）** → 20 项记录表 → 故障速查 |

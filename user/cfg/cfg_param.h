@@ -171,4 +171,62 @@
 #define APP_MQTT_TASK_STACK_SIZE    2048  /* 上云任务栈大小(字节) */
 #define APP_MQTT_TASK_PRIO          1     /* 上云任务优先级：与另三个任务平级 */
 
+/* ---------- 存储链·器件参数（EEPROM / SPI Flash，2.3 新增） ----------
+ * ★ 板上实际器件（2026-10-29 实物确认 + 真机 JEDEC 佐证）：
+ *   - EEPROM = AT24C02：字地址 1 字节，页 8 B，容量 256 B，器件地址 0xA0
+ *   - FLASH  = W25Q128：JEDEC EF 40 18，16 MB，指令集与 W25Q64 完全一致
+ * 型号仍保留上电自动识别（mod_eeprom_init 的两步探测）：
+ *   一是教学价值 —— "字地址位宽搞错时写照样'成功'、读回全是错位"这个坑
+ *   只有让代码自己识别才讲得透；二是换板不换码。
+ * ★ 位宽搞错的现象极具迷惑性：地址帧照样 ACK、写照样返回成功，
+ *   但数据整体错位（16 位器件会把第一个数据字节当成地址低字节吃掉），
+ *   现象就是"上电写成功、周期读回 INVALID"——2.3 首跑日志即此。 */
+#define AT24C02_PAGE_SIZE       8      /* 页写最大粒度(字节)：跨页会页内回绕、覆盖本页开头   */
+#define AT24C02_WRITE_CYCLE_MS  5      /* 写周期上限(ms)：期间不应答，轮询 ACK 探到即写完    */
+#define AT24C02_SIZE_BYTES      256    /* 总容量(字节)：2Kbit = 256 B，容量闸门在 cfg_check  */
+#define AT24C256_PAGE_SIZE      64     /* 页写最大粒度(字节)：大容量器件的页更宽             */
+#define AT24C256_SIZE_BYTES     32768U /* 总容量(字节)：256 Kbit = 32 KB                     */
+#define AT24C256_WRITE_CYCLE_MS 10     /* 写周期上限(ms)：大容量器件按手册留到 10 ms          */
+
+/* 型号探测用的两个"牺牲地址"（都远离配置块 0x0000..0x0013）：
+ *   PROBE_ADDR8  = 0x00F0：按 1 字节字地址写读（判 8 位器件，落在 0xF0..0xF2）
+ *   PROBE_ADDR16 = 0xFFF0：按 2 字节字地址写读（判 16 位器件，落在 32 KB 末尾）
+ * ★ 为什么必须分两步、且以"8 位写读成不成立"为准：
+ *   在 8 位器件上用 16 位地址【写】+【读】，两个动作会一致地错位（读回来
+ *   照样拿到特征值），单看"写读一致"判不出位宽 —— 首版探测就是栽在这里，
+ *   把 AT24C02 误判成 AT24C256。真正的判别点是反过来的那一刀：
+ *   8 位写读在【16 位器件】上不成立 —— 它把 0xF0 当高位地址，写落到 0xF0xx，
+ *   而 8 位读给不出低位地址、只能从内部指针接着读，读回来是 0xFF ≠ 特征值。 */
+#define EEPROM_CHIP_PROBE_ADDR8     0x00F0u
+#define EEPROM_CHIP_PROBE_ADDR16    0xFFF0u
+#define EEPROM_CHIP_PROBE_PATTERN   0xA5u
+
+#define W25Q64_SECTOR_SIZE      4096   /* 扇区(字节)：擦除单位——先擦后写                     */
+#define W25Q64_PAGE_SIZE        256    /* 页(字节)：编程单位，一次编程绝不跨页               */
+#define W25Q64_SIZE_BYTES       0x800000u /* W25Q64 总容量 8 MB                             */
+#define W25Q128_SIZE_BYTES      0x1000000u /* W25Q128 总容量 16 MB（板上实测型号）           */
+#define W25Q64_SECTOR_ERASE_TIMEOUT_MS  400  /* 扇区擦典型 45 ms，按数据手册上限留 400 ms     */
+#define W25Q64_PAGE_PROG_TIMEOUT_MS     10   /* 页编程典型 0.6 ms，上限留 10 ms               */
+
+/* ---------- 存储链·应用层参数 ---------- */
+#define APP_PARAM_CFG_OFFSET    0      /* 配置块在 EEPROM 里的起始地址                        */
+#define APP_PARAM_CFG_SIZE      20     /* 配置块字节数：app_param.h 有 static_assert 钉死布局 */
+#define APP_PARAM_READBACK_MS   3000   /* 配置读回验证周期：每 3 s 从芯片重读一遍（只读不写） */
+#define APP_LOG_HDR_ADDR        0x000000u /* 日志头扇区：magic + 版本（4 KB）                 */
+#define APP_LOG_AREA_ADDR       0x001000u /* 日志区起始：一条 8 B × 512 条 / 扇区             */
+#define APP_LOGGER_PERIOD_MS    5000   /* 日志追加周期：与上云上报同拍，取 DHT11 快照         */
+#define APP_STORAGE_TICK_MS     1000   /* 存储任务基础节拍：3 s / 5 s 都是它的整数倍          */
+
+/* ---------- 存储链·总线层参数 ---------- */
+#define NET_I2C_TIMEOUT_MS      50     /* I2C 单次事务超时(ms)：到点返回 TIMEOUT，绝不死等    */
+#define NET_SPI_TIMEOUT_MS      10     /* SPI 单次交换超时(ms)：10.5 MHz 下 1 KB 也就 1 ms    */
+#define NET_SPI_XFER_MAX        1024   /* 单个片选包络最大字节：读 256 B 数据 + 4 B 指令头    */
+
+/* ---------- 存储任务栈 / 优先级 ----------
+ * 栈给 2048：mod_flash 页编程一次要在栈上放 4 + 256 字节的发送缓冲，
+ * 加上记录缓冲、读回比对缓冲与拼行打印，是六个业务任务里的第二大户。
+ * ★ 单位仍是【字节】！ */
+#define APP_STORAGE_TASK_STACK_SIZE 2048  /* 存储任务栈大小(字节) */
+#define APP_STORAGE_TASK_PRIO   1      /* 与其余业务任务平级：慢速存储不抢占本地控制 */
+
 #endif /* CFG_PARAM_H */

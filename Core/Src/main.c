@@ -23,6 +23,8 @@
 #include "tim.h"
 #include "usart.h"
 #include "gpio.h"
+#include "i2c.h"
+#include "spi.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -96,6 +98,11 @@ int main(void)
   MX_USART1_UART_Init();
   MX_USART3_UART_Init();
   /* USER CODE BEGIN 2 */
+  /* 2.3 新增：I2C1（AT24C02）与 SPI1（W25Q64）。
+   *   与 USART3 同一约定：总线属于 Core 公共外设，main 里无条件初始化；
+   *   cfg 开关关掉的是"用总线的模块"，没人用时 HAL 代码被 gc 回收。 */
+  MX_I2C1_Init();
+  MX_SPI1_Init();
   /* ★ 排障探针：在调度器启动【之前】从 USART1 发一行。
    *   此刻没有 FreeRTOS、没有任务并发、没有 cfg 开关，链路上只有 huart1 与 HAL，
    *   所以这一行是判定"TX 引脚/接线/波特率"与"任务层打印"的分水岭：

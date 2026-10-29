@@ -40,6 +40,7 @@
 #include "app_cmd.h"   /* 串口命令任务（串口控灯章节新增） */
 #include "app_dht11.h" /* DHT11 采集任务（DHT11 章节新增） */
 #include "app_mqtt.h"  /* WiFi-MQTT 上云任务（2.2 章节新增） */
+#include "app_param.h" /* 存储任务（2.3 章节新增：一个任务驱动两条链） */
 #include "cmsis_os.h"  /* FreeRTOS 的 CMSIS-RTOS V2 封装：osThreadNew 等 */
 #include "main.h"      /* 包含 stm32f4xx_hal.h，提供 Error_Handler 与 LED 引脚宏 */
 #include "task.h"      /* FreeRTOS 原生任务 API（TaskHandle_t 等） */
@@ -114,6 +115,21 @@ static const osThreadAttr_t s_app_mqtt_task_attr = {
     .priority   = (osPriority_t)APP_MQTT_TASK_PRIO, /* 数字越大优先级越高 */
 };
 #endif /* APP_MQTT_ENABLE */
+
+#if APP_PARAM_ENABLE || APP_LOGGER_ENABLE
+/* ========== 存储任务（一个任务驱动两条链） ========== */
+
+/* 任务句柄：创建成功非 NULL、失败为 NULL（堆内存不足时） */
+static TaskHandle_t s_app_storage_task_handle = NULL;
+
+/* 任务属性：名字 / 栈 / 优先级，数值全部来自 cfg 横切层 cfg_param.h。
+ * 栈给 2048：mod_flash 页编程要在栈上放 260 字节发送缓冲（六个任务里第二大户） */
+static const osThreadAttr_t s_app_storage_task_attr = {
+    .name       = "app_storage_task",
+    .stack_size = APP_STORAGE_TASK_STACK_SIZE,      /* 栈大小（单位：字节！） */
+    .priority   = (osPriority_t)APP_STORAGE_TASK_PRIO,
+};
+#endif /* APP_PARAM_ENABLE || APP_LOGGER_ENABLE */
 #endif /* APP_TASK_ENABLE */
 
 /*----------------------------------------------------------------------------
@@ -191,4 +207,16 @@ void app_taskCreate(void)
         Error_Handler();   /* 堆内存不足：停机保留现场 */
     }
 #endif /* APP_TASK_ENABLE && APP_MQTT_ENABLE */
+
+#if APP_TASK_ENABLE && (APP_PARAM_ENABLE || APP_LOGGER_ENABLE)
+    /* 创建存储任务：进入调度后由 app_storage_task() 驱动两条存储链。
+     * ★ 创建顺序放在最后：它要读 DHT11 的快照（采集先跑起来，首条日志才
+     *   不是空数据），也是本工程五个任务的固定次序：
+     *   LED → 串口 → DHT11 → MQTT → 存储。 */
+    s_app_storage_task_handle = osThreadNew(app_storage_task, NULL, &s_app_storage_task_attr);
+    if (s_app_storage_task_handle == NULL)
+    {
+        Error_Handler();   /* 堆内存不足：停机保留现场 */
+    }
+#endif /* APP_TASK_ENABLE && (APP_PARAM_ENABLE || APP_LOGGER_ENABLE) */
 }

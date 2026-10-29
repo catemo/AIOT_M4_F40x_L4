@@ -18,6 +18,39 @@
 
 #include "app_link.h"
 #include "per_led.h"    /* 借 LED 链的感知层接口：编号 → 动作（跨链依赖） */
+#if APP_PARAM_ENABLE
+#include "app_param.h"  /* 阈值运行时读配置块（2.3 会合点：读不到回落宏值） */
+#endif
+
+/*----------------------------------------------------------------------------
+ * 当前生效的阈值（2.3 会合点）：
+ *   ① app_param 配置块有效 → 用芯片里的值（串口 TH 命令改的、断电不丢）；
+ *   ② 否则回落 cfg_param.h 的宏（存储链关闭/器件不在时的兜底）。
+ * ★ 判定代码一行没变 —— 变的只是阈值的"来路"，这正是参数与逻辑分离的收益。
+ *----------------------------------------------------------------------------*/
+static uint8_t link_temp_th(void)
+{
+#if APP_PARAM_ENABLE
+    uint8_t t = (uint8_t)APP_LINK_TEMP_THRESHOLD;
+    uint8_t h;
+    APP_PARAM_GetThresholds(&t, &h);
+    return t;
+#else
+    return (uint8_t)APP_LINK_TEMP_THRESHOLD;
+#endif
+}
+
+static uint8_t link_humi_th(void)
+{
+#if APP_PARAM_ENABLE
+    uint8_t t;
+    uint8_t h = (uint8_t)APP_LINK_HUMI_THRESHOLD;
+    APP_PARAM_GetThresholds(&t, &h);
+    return h;
+#else
+    return (uint8_t)APP_LINK_HUMI_THRESHOLD;
+#endif
+}
 
 /* ========== 上一次联动的结果（边沿触发用） ==========
  * 取值：0 = 灭，1 = 亮，0xFF = 还没联动过（首帧必须写一次）
@@ -68,7 +101,7 @@ void APP_LINK_Init(void)
  *----------------------------------------------------------------------------*/
 void APP_LINK_ApplyTemp(uint8_t temp_int)
 {
-    uint8_t want = (temp_int >= APP_LINK_TEMP_THRESHOLD) ? 1U : 0U;
+    uint8_t want = (temp_int >= link_temp_th()) ? 1U : 0U;
 
     if (want == s_led1_state)
     {
@@ -92,7 +125,7 @@ void APP_LINK_ApplyTemp(uint8_t temp_int)
  *----------------------------------------------------------------------------*/
 void APP_LINK_ApplyHum(uint8_t hum_int)
 {
-    uint8_t want = (hum_int >= APP_LINK_HUMI_THRESHOLD) ? 1U : 0U;
+    uint8_t want = (hum_int >= link_humi_th()) ? 1U : 0U;
 
     if (want == s_led2_state)
     {
