@@ -10,7 +10,8 @@
  *
  *  华为云下行有三条通道（按主题分发，见 app_mqtt.c 的 app_mqtt_handle_downlink）：
  *      commands/#      同步命令：执行 LED_Control 并回命令响应（request_id 原样带回）
- *      properties/set/# 属性设置：publish_period_s（运行时改上报周期）/ led，
+ *                      LED_Control 参数：led_index(0~4：0=全部 1=LED1 2=LED2 3/4=无板载) + state(0/1)
+ *      properties/set/# 属性设置：publish_period_s（运行时改上报周期）/ led_index+state，
  *                        回属性设置响应 {"result_code":0/1}
  *      messages/down   消息下行：异步执行命令，不回响应（应答通道不存在）
  *
@@ -46,7 +47,7 @@
  *  从哪里来（华为云 IoTDA 控制台）：
  *    ① 创建产品（协议 MQTT / 数据格式 JSON）→ 记下产品 ID
  *    ② 定义服务 Sensor，属性 temperature / humidity（decimal）
- *    ③ 添加命令 LED_Control，参数 led（int）
+ *    ③ 添加命令 LED_Control，参数 led_index（int，0~4）+ state（int，0/1）
  *    ④ 注册设备 → 保存 device_id 与 device_secret
  *    ⑤ 总览 → 接入信息 → 复制 MQTT 域名（cn-north-4）
  *    ⑥ 在线工具生成鉴权参数（选"不校验时间戳"）→ ClientId / 用户名 / 密码

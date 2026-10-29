@@ -552,29 +552,63 @@ static void app_mqtt_parse_request_id(const char *topic, char *out, uint32_t cap
     out[n] = '\0';
 }
 
+/* 从 JSON 里解析 LED 控制命令（华为云物模型 LED_Control）：
+ *   新格式：{"led_index":0~4,"state":0/1}
+ *             led_index 0=全部灯 1=LED1 2=LED2 3/4=本板无此灯（回 result_code=1）
+ *             state     0=关 1=开（非 0 一律按开处理）
+ *   旧格式（兼容）：{"led":0/1/2} → 视作 state=1 点亮；led=0 全灭
+ * 返回 1 = 解析成功（*idx / *state 有效），0 = 解析失败（两字段都没有） */
+static int16_t app_mqtt_parse_led_cmd(const char *json, int16_t *idx, int16_t *state)
+{
+    int16_t i = app_mqtt_parse_int(json, "led_index");
+    int16_t s = app_mqtt_parse_int(json, "state");
+
+    if ((i >= 0) && (s >= 0))
+    {
+        *idx = i;
+        *state = s;
+        return 1;
+    }
+    i = app_mqtt_parse_int(json, "led");
+    if (i >= 0)
+    {
+        *idx = i;
+        *state = (i == 0) ? 0 : 1;
+        return 1;
+    }
+    return 0;
+}
+
 /* 执行 LED 控制（与串口命令同一个入口：云端只是多了一个"遥控器"）
- * 返回 result_code：0=成功，1=执行失败（LED 链被裁剪 / 值非法）
+ * 返回 result_code：0=成功，1=执行失败（LED 链被裁剪 / 灯号无板载 / 值非法）
  * ★ 手动接管的语义 1.3 就写好了。若直接操作引脚，闪烁状态机会在
  *   半周期后把它翻回来——现象是"云端下发成功，灯闪了一下又灭了"。 */
-static int16_t app_mqtt_exec_led(int16_t led)
+static int16_t app_mqtt_exec_led_cmd(int16_t idx, int16_t state)
 {
-    switch (led)
+    int on = (state != 0);   /* state 非 0 一律按"开"处理，与参考工程一致 */
+
+    switch (idx)
     {
         case 0:
-            /* 全灭 */
+            /* 全部 LED 一起操作 */
 #if APP_BLINK_ENABLE
-            (void)APP_BLINK_Off(APP_BLINK_LED1);
+            if (on != 0) { (void)APP_BLINK_On(APP_BLINK_LED1); }
+            else         { (void)APP_BLINK_Off(APP_BLINK_LED1); }
 #endif
 #if PER_LED_ENABLE
-            (void)PER_LED_Off(PER_LED2);
+            if (on != 0) { (void)PER_LED_On(PER_LED2); }
+            else         { (void)PER_LED_Off(PER_LED2); }
 #endif
-            MOD_UART1_SendString("[MQTT-CMD] all LEDs OFF\r\n");
+            MOD_UART1_SendString((on != 0) ? "[MQTT-CMD] all LEDs ON\r\n"
+                                           : "[MQTT-CMD] all LEDs OFF\r\n");
             return 0;
 
         case 1:
 #if APP_BLINK_ENABLE
-            (void)APP_BLINK_On(APP_BLINK_LED1);
-            MOD_UART1_SendString("[MQTT-CMD] LED1 ON\r\n");
+            if (on != 0) { (void)APP_BLINK_On(APP_BLINK_LED1); }
+            else         { (void)APP_BLINK_Off(APP_BLINK_LED1); }
+            MOD_UART1_SendString((on != 0) ? "[MQTT-CMD] LED1 ON\r\n"
+                                           : "[MQTT-CMD] LED1 OFF\r\n");
             return 0;
 #else
             MOD_UART1_SendString("[MQTT-CMD] LED1 unavailable (blink chain off)\r\n");
@@ -583,16 +617,32 @@ static int16_t app_mqtt_exec_led(int16_t led)
 
         case 2:
 #if PER_LED_ENABLE
-            (void)PER_LED_On(PER_LED2);
-            MOD_UART1_SendString("[MQTT-CMD] LED2 ON\r\n");
+            if (on != 0) { (void)PER_LED_On(PER_LED2); }
+            else         { (void)PER_LED_Off(PER_LED2); }
+            MOD_UART1_SendString((on != 0) ? "[MQTT-CMD] LED2 ON\r\n"
+                                           : "[MQTT-CMD] LED2 OFF\r\n");
             return 0;
 #else
             MOD_UART1_SendString("[MQTT-CMD] LED2 unavailable (per_led off)\r\n");
             return 1;
 #endif
 
+        case 3:
+        case 4:
+        {
+            char     line[APP_MQTT_PRINT_BUF_SIZE];
+            uint32_t pos = 0U;
+
+            pos = app_cat(line, pos, sizeof(line), "[MQTT-CMD] LED");
+            pos = app_cat_u32(line, pos, sizeof(line), (uint32_t)idx);
+            (void)app_cat(line, pos, sizeof(line),
+                          " unavailable on this board (only LED1/LED2)\r\n");
+            MOD_UART1_SendString(line);
+            return 1;
+        }
+
         default:
-            MOD_UART1_SendString("[MQTT-CMD] unknown led value -> result_code=1\r\n");
+            MOD_UART1_SendString("[MQTT-CMD] unknown led_index -> result_code=1\r\n");
             return 1;
     }
 }
@@ -605,19 +655,29 @@ static void app_mqtt_handle_cmd(MOD_MQTT_Msg_t *msg)
     char     rid[48];   /* ★ 与 MOD_MQTT_TOPIC_MAX 是一对：主题缓冲必须装得下
                          *   "固定部分 + 这里能装下的最长 rid"，否则响应主题被截断 */
     uint32_t pos;
-    int16_t  led;
+    int16_t  idx;
+    int16_t  state;
     int16_t  result_code;
 
-    led = app_mqtt_parse_int(msg->payload, "led");
     app_mqtt_parse_request_id(msg->topic, rid, sizeof(rid));
 
     pos = 0U;
-    pos = app_cat(line, pos, sizeof(line), "[MQTT-CMD] LED_Control led=");
-    pos = app_cat_u32(line, pos, sizeof(line), (led < 0) ? 99U : (uint32_t)led);
+    pos = app_cat(line, pos, sizeof(line), "[MQTT-CMD] LED_Control");
+    if (app_mqtt_parse_led_cmd(msg->payload, &idx, &state) != 0)
+    {
+        pos = app_cat(line, pos, sizeof(line), " led_index=");
+        pos = app_cat_u32(line, pos, sizeof(line), (uint32_t)idx);
+        pos = app_cat(line, pos, sizeof(line), " state=");
+        pos = app_cat_u32(line, pos, sizeof(line), (uint32_t)state);
+        result_code = app_mqtt_exec_led_cmd(idx, state);
+    }
+    else
+    {
+        pos = app_cat(line, pos, sizeof(line), " no led_index/state field");
+        result_code = 1;
+    }
     (void)app_cat(line, pos, sizeof(line), "\r\n");
     MOD_UART1_SendString(line);
-
-    result_code = app_mqtt_exec_led(led);
 
     /* 回响应：主题里的 request_id 必须与下发时一致，
      * 否则控制台上的"命令-响应"配不成对，一直显示等待响应 */
@@ -637,7 +697,7 @@ static void app_mqtt_handle_cmd(MOD_MQTT_Msg_t *msg)
     {
         (void)MOD_MQTT_Publish(s_topic,
                                "{\"result_code\":1,\"response_name\":\"COMMAND_RESPONSE\","
-                               "\"paras\":{\"result\":\"bad led value\"}}");
+                               "\"paras\":{\"result\":\"bad led command\"}}");
     }
     s_last_tx = osKernelGetTickCount();
     MOD_UART1_SendString("[MQTT-CMD] response sent\r\n");
@@ -647,7 +707,7 @@ static void app_mqtt_handle_cmd(MOD_MQTT_Msg_t *msg)
  * 载荷格式 {"service_id":"Sensor","properties":{...}}，支持的可写属性：
  *   publish_period_s —— 上报周期（秒，1~3600），运行时生效（M4 无 EEPROM 持久化，
  *                        掉电恢复编译期默认值 APP_MQTT_PUBLISH_PERIOD_MS）
- *   led             —— 驱动执行器（与命令下发同一入口）
+ *   led_index/state（或旧 led）—— 驱动执行器（与命令下发同一入口）
  * 应答发到 properties/set/response/request_id={rid}，{"result_code":0/1} */
 static void app_mqtt_handle_set(MOD_MQTT_Msg_t *msg)
 {
@@ -655,7 +715,6 @@ static void app_mqtt_handle_set(MOD_MQTT_Msg_t *msg)
     char     rid[48];
     uint32_t pos;
     int16_t  period_s;
-    int16_t  led;
     uint8_t  applied = 0U;
 
     app_mqtt_parse_request_id(msg->topic, rid, sizeof(rid));
@@ -691,13 +750,17 @@ static void app_mqtt_handle_set(MOD_MQTT_Msg_t *msg)
         }
     }
 
-    /* 可写属性 2：led 驱动执行器 */
-    led = app_mqtt_parse_int(msg->payload, "led");
-    if (led >= 0)
+    /* 可写属性 2：led_index/state（或旧 led）驱动执行器 */
     {
-        if (app_mqtt_exec_led(led) == 0)
+        int16_t idx;
+        int16_t state;
+
+        if (app_mqtt_parse_led_cmd(msg->payload, &idx, &state) != 0)
         {
-            applied = 1U;
+            if (app_mqtt_exec_led_cmd(idx, state) == 0)
+            {
+                applied = 1U;
+            }
         }
     }
 
@@ -716,13 +779,14 @@ static void app_mqtt_handle_set(MOD_MQTT_Msg_t *msg)
 }
 
 /* 消息下行通道（$oc/devices/{id}/sys/messages/down，异步）：
- * 云端发什么收什么；识别到 JSON 命令（如 {"led":1}）就执行，【不回响应】
- * ——应答通道不存在，硬回会破坏"消息"语义 */
+ * 云端发什么收什么；识别到 JSON 命令（led_index/state 或旧 led）就执行，
+ * 【不回响应】——应答通道不存在，硬回会破坏"消息"语义 */
 static void app_mqtt_handle_msg(MOD_MQTT_Msg_t *msg)
 {
     char     line[APP_MQTT_PRINT_BUF_SIZE];
     uint32_t pos;
-    int16_t  led;
+    int16_t  idx;
+    int16_t  state;
 
     pos = 0U;
     pos = app_cat(line, pos, sizeof(line), "[MQTT-MSG] async message: ");
@@ -730,14 +794,15 @@ static void app_mqtt_handle_msg(MOD_MQTT_Msg_t *msg)
     (void)app_cat(line, pos, sizeof(line), "\r\n");
     MOD_UART1_SendString(line);
 
-    led = app_mqtt_parse_int(msg->payload, "led");
-    if (led < 0)
+    if (app_mqtt_parse_led_cmd(msg->payload, &idx, &state) != 0)
     {
-        MOD_UART1_SendString("[MQTT-MSG] no led field, ignored (async, no response)\r\n");
-        return;
+        (void)app_mqtt_exec_led_cmd(idx, state);
+        MOD_UART1_SendString("[MQTT-MSG] async command executed (no response)\r\n");
     }
-    (void)app_mqtt_exec_led(led);
-    MOD_UART1_SendString("[MQTT-MSG] async command executed (no response)\r\n");
+    else
+    {
+        MOD_UART1_SendString("[MQTT-MSG] no led_index/state (or led) field, ignored (async, no response)\r\n");
+    }
 }
 
 /* 下行分发：按主题区分三个通道
