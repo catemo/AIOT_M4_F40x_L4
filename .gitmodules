@@ -1,0 +1,3 @@
+[submodule "docs"]
+	path = docs
+	url = https://gitee.com/catemo/iot_-m4_-l4-docs.git

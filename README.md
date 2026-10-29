@@ -806,6 +806,8 @@ if (snap.valid == 0U) { /* 还没采到过：如实说"没数据"，不编一个
 
 全部为中文，正文在 `docs/` 下；每篇 `.md` 都有**同名单文件网页版**（样式内嵌、无外部依赖，可直接双击打开或打印成 PDF）。
 
+> **说明**：`docs/` 为**私有子模块**（仓库 [iot_-m4_-l4-docs](https://gitee.com/catemo/iot_-m4_-l4-docs)，仅授权账号可见）。克隆本项目后需执行 `git submodule update --init docs` 拉取文档；未授权账号无法获取 docs 内容。
+
 | 分类 | 文档 | 内容 |
 |---|---|---|
 | 索引 | [`docs/README.md`](docs/README.md) | 分类导航 + 按角色的阅读路径 + 维护脚本清单 |
