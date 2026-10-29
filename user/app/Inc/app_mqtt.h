@@ -31,6 +31,12 @@
 /* ==========================================================================
  *  ★★★ 用户配置区：这 8 个宏是【唯一】需要你改的地方 ★★★
  *
+ *  ★ 凭证不入库（2026-10-29 起）：
+ *    本文件里的值全是占位符。真实值写在 user/app/Inc/app_mqtt_secret.h
+ *    （被 .gitignore 忽略，只留在本机）。该文件存在时本文件的所有配置被它
+ *    覆盖；不存在（如新克隆的仓库）就回落到下面的占位符，编译不报错。
+ *    首次使用：复制 app_mqtt_secret.h.template 为 app_mqtt_secret.h 再填值。
+ *
  *  从哪里来（华为云 IoTDA 控制台）：
  *    ① 创建产品（协议 MQTT / 数据格式 JSON）→ 记下产品 ID
  *    ② 定义服务 Sensor，属性 temperature / humidity（decimal）
@@ -45,16 +51,21 @@
  *  ★ 鉴权参数由在线工具算好再填：不在 MCU 上实现 HMAC-SHA256，
  *    否则要拉进一整套加密库（几 KB FLASH + 一堆移植工作）。
  * ========================================================================== */
-#define APP_MQTT_WIFI_SSID      "your-2.4g-ssid"        /* 必须是 2.4GHz！ESP8266 不支持 5GHz */
+#define APP_MQTT_WIFI_SSID      "your-wifi-ssid"         /* 必须是 2.4GHz！ESP8266 不支持 5GHz */
 #define APP_MQTT_WIFI_PWD       "your-wifi-password"
 
-#define APP_MQTT_BROKER_HOST    "xxxxxxxxxx.st1.iotda-device.cn-north-4.myhuaweicloud.com"
-#define APP_MQTT_BROKER_PORT    1883                    /* 明文 MQTT；TLS 是 8883，本工程不做 */
+#define APP_MQTT_BROKER_HOST    "xxxxxxxxxx.iot-mqtts.cn-north-4.myhuaweicloud.com"
+#define APP_MQTT_BROKER_PORT    1883                    /* 明文 MQTT；8883 是 TLS，本工程不用 */
 
-#define APP_MQTT_DEVICE_ID      "your-device-id"        /* 设备 ID：主题里要用它 */
-#define APP_MQTT_CLIENT_ID      "your-device-id_0_0_2026"  /* 在线工具生成的 ClientId */
-#define APP_MQTT_USERNAME       "your-device-id"        /* 在线工具生成的用户名 */
-#define APP_MQTT_AUTH_PASSWORD  "your-hmac-password"    /* 在线工具生成的密码 */
+#define APP_MQTT_DEVICE_ID      "your-device-id"                           /* 设备 ID：主题里要用它 */
+#define APP_MQTT_CLIENT_ID      "your-device-id_0_0_0000000000"            /* 在线工具生成的 ClientId */
+#define APP_MQTT_USERNAME       "your-device-id"                           /* 在线工具生成的用户名 */
+#define APP_MQTT_AUTH_PASSWORD  "your-hmac-password"                       /* 在线工具生成的密码 */
+
+/* 本机私有凭证（git 忽略）：存在则整体覆盖上面的占位符 */
+#if __has_include("app_mqtt_secret.h")
+#include "app_mqtt_secret.h"
+#endif
 
 /* 物模型里的服务 ID：必须与控制台"功能定义"里完全一致，
  * 不一致的后果是华为云静默丢弃属性——设备在线、日志显示 Published，

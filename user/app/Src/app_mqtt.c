@@ -477,7 +477,8 @@ static void app_mqtt_parse_request_id(const char *topic, char *out, uint32_t cap
 static void app_mqtt_handle_cmd(MOD_MQTT_Msg_t *msg)
 {
     char     line[APP_MQTT_PRINT_BUF_SIZE];
-    char     rid[48];
+    char     rid[48];   /* ★ 与 MOD_MQTT_TOPIC_MAX 是一对：主题缓冲必须装得下
+                         *   "固定部分 + 这里能装下的最长 rid"，否则响应主题被截断 */
     uint32_t pos;
     int16_t  led;
     int16_t  result_code = 0;

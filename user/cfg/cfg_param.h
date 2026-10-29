@@ -129,9 +129,15 @@
  *   Broker 直接断开连接，所以这条下限在 cfg_check.h 里有闸门看着。 */
 #define MOD_MQTT_TX_BUF_SIZE        320
 
-/* 主题缓冲(字节)：华为云命令主题含 32 位 device_id，
- * "$oc/devices/{id}/sys/commands/request_id={rid}" 约 70 字节，96 够用 */
-#define MOD_MQTT_TOPIC_MAX          96
+/* 主题缓冲(字节)：最长的主题是命令响应
+ *   "$oc/devices/{device_id}/sys/commands/response/request_id={rid}"
+ *   ├─ 固定部分："$oc/devices/" + device_id + "/sys/commands/response/request_id=" 约 60 字节
+ *   └─ rid 部分：取自 app_mqtt.c 的 rid[]（48 字节，可装 47 字符）
+ * ★ 必须 ≥ 固定部分 + rid 长度 + 1，否则响应主题会被 app_cat 静默截断：
+ *   云端匹配不到"命令-响应"这一对，控制台会永远显示"等待响应"，
+ *   而串口日志看起来一切正常（Published 了）——这是最难查的一类失败。
+ * ★ 换了更长的 device_id 时，这个数要跟着往上调（闸门在 cfg_check.h 守着下限） */
+#define MOD_MQTT_TOPIC_MAX          128
 
 /* 收到报文的内容缓冲(字节)：云端下发的 JSON 约 120 字节，128 够用。
  * 超出部分会被截断（但报文本身仍被完整收下、不会破坏后续报文边界） */

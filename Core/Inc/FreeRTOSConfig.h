@@ -68,7 +68,11 @@
 #define configTICK_RATE_HZ                       ((TickType_t)1000)
 #define configMAX_PRIORITIES                     ( 56 )
 #define configMINIMAL_STACK_SIZE                 ((uint16_t)128)
-#define configTOTAL_HEAP_SIZE                    ((size_t)15360)
+/* FreeRTOS 堆(字节)：任务栈与 TCB 都从这里分配。
+ * 五个任务栈 512+512+1024+768+2048 = 4864 B，加 TCB 与内核对象约需 6.2 KB；
+ * 15 KB 时余量 2.4 倍，取 32 KB 后余量 5.2 倍——以后加任务/队列不必回来改这里。
+ * ★ 这个数组整块落在 .bss：改它只动 RAM，FLASH 一个字节都不会变。 */
+#define configTOTAL_HEAP_SIZE                    ((size_t)32768)
 #define configMAX_TASK_NAME_LEN                  ( 16 )
 #define configUSE_TRACE_FACILITY                 1
 #define configUSE_16_BIT_TICKS                   0

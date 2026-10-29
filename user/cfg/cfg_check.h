@@ -268,9 +268,12 @@
 #error "MOD_MQTT_TX_BUF_SIZE requires >= 256 (topic + JSON + fixed header)"
 #endif
 
-/* 主题缓冲下限：华为云命令主题含 32 位 device_id，装不下就订阅不到命令 */
-#if MOD_MQTT_ENABLE && (MOD_MQTT_TOPIC_MAX < 72)
-#error "MOD_MQTT_TOPIC_MAX requires >= 72 (Huawei Cloud command topic with device_id)"
+/* 主题缓冲下限 = 命令响应主题的固定部分(约 60) + rid 缓冲(47) + 结尾 '\0'。
+ * ★ 装不下的后果不是"订阅不到命令"，而是更隐蔽的一种：
+ *   上报和订阅都正常，唯独"命令响应"那个最长的主题被 app_cat 静默截断，
+ *   云端匹配不上，控制台永远停在"等待响应"，而串口日志什么都看不出来。 */
+#if MOD_MQTT_ENABLE && (MOD_MQTT_TOPIC_MAX < 108)
+#error "MOD_MQTT_TOPIC_MAX requires >= 108 (fixed part 60 + request_id 47 + NUL)"
 #endif
 
 #endif /* CFG_CHECK_H */

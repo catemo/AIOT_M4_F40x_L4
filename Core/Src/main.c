@@ -96,7 +96,19 @@ int main(void)
   MX_USART1_UART_Init();
   MX_USART3_UART_Init();
   /* USER CODE BEGIN 2 */
+  /* ★ 排障探针：在调度器启动【之前】从 USART1 发一行。
+   *   此刻没有 FreeRTOS、没有任务并发、没有 cfg 开关，链路上只有 huart1 与 HAL，
+   *   所以这一行是判定"TX 引脚/接线/波特率"与"任务层打印"的分水岭：
+   *     串口看得到 → 硬件与 HAL 都正常，问题在任务层；
+   *     看不到     → 先查 PA9 有没有接到 USB 转串口的 RX（应与 PA10 交叉），
+   *                  以及波特率是否为 115200-8-N-1。
+   *   定位完成后可整段删除，不影响任何业务代码。 */
+  {
+      static const char boot_msg[] = "[BOOT] USART1 TX alive\r\n";
 
+      (void)HAL_UART_Transmit(&huart1, (const uint8_t *)boot_msg,
+                              (uint16_t)(sizeof(boot_msg) - 1U), 100U);
+  }
   /* USER CODE END 2 */
 
   /* Init scheduler */
