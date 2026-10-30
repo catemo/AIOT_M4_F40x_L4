@@ -4,12 +4,14 @@
  * @brief   应用层（app）—— LED 闪烁服务实现（闪烁状态机）
  *
  *  核心思路（就 3 行逻辑）：
- *    每调用一次 APP_BLINK_process()（间隔 1ms）：
- *      计时器 +1
+ *    每调用一次 APP_BLINK_process()（间隔 APP_BLINK_TICK_MS，当前 10ms）：
+ *      计时器 + 节拍值
  *      计时器 >= 半周期 → 计时器清零，翻转该灯
  *
  *  用"计毫秒数"而不是"读时间戳"，是为了让新手一眼看懂，
  *  也避免了溢出、时基换算这些坑。
+ *  节拍从 1ms 放宽到 10ms（2026-10-30）：半周期 500ms 下肉眼无差别，
+ *  LED 任务唤醒从 1000 次/s 降到 100 次/s。
  *
  *  接口的完整说明（功能/参数/返回值/调用处/注意事项）写在 app_blink.h，
  *  本文件的注释侧重"状态机是怎么一步步走的"。
@@ -82,11 +84,11 @@ uint8_t APP_BLINK_blink_set(APP_BLINK_LED_t led, uint16_t half_period_ms)
  * 函数功能：闪烁状态机 —— 逐颗灯累加毫秒，数够半周期就翻转它一次
  * 参数    ：无
  * 返回值  ：APP_BLINK_OK(0)，固定成功（无参数可校验，不会失败）
- * 调用处  ：app_led.c 的 app_led_task() 任务循环内，每 1ms 调用一次
- *           【必须严格保持 1ms 节拍，见 app_blink.h 的注意事项】
- * 注意事项：① 计数用 counter_ms++ 累加，1 次调用 = 1ms，
- *              因此"半周期"与"调用间隔"必须配套：把 osDelay(1) 改成
- *              osDelay(5)，灯的实际闪烁周期就会变成设定值的 5 倍
+ * 调用处  ：app_led.c 的 app_led_task() 任务循环内，每 APP_BLINK_TICK_MS
+ *           （当前 10ms）调用一次【节拍值与 cfg 配套，见 app_blink.h 注意事项】
+ * 注意事项：① 计数用 counter_ms += APP_BLINK_TICK_MS 累加，1 次调用 =
+ *              一个节拍，因此"半周期"与"调用间隔"必须配套：
+ *              cfg_check.h 的整数倍闸门守着这条，改错编译期就报
  *           ② 判断用 >= 而不是 ==，即使某次节拍被延迟、counter_ms 一次跨过
  *              半周期，也能正确翻转并重新计数，不会漏掉或卡死
  *           ③ 翻转后立即把 counter_ms 清 0（而不是减去 half_period_ms），
@@ -109,7 +111,7 @@ uint8_t APP_BLINK_process(void)
             continue;  /* 这颗灯不闪烁，跳过（不计数、不翻转） */
         }
 
-        s_led_blink[i].counter_ms++;  /* 计数器每 1ms 递增一次 */
+        s_led_blink[i].counter_ms += APP_BLINK_TICK_MS;  /* 每次调用累加一个节拍 */
 
         if (s_led_blink[i].counter_ms >= s_led_blink[i].half_period_ms)
         {

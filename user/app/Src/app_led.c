@@ -9,7 +9,7 @@
  *             └─ PER_LED_Init()              【感知层·统一接口】
  *                  └─ per_gpio_init()             【感知层·GPIO 驱动】
  *                       └─ HAL_GPIO_Init()              【HAL / 硬件】
- *    app_led_task()      每 1ms 喂一次节拍
+ *    app_led_task()      每 APP_BLINK_TICK_MS(10ms) 喂一次节拍
  *        └─ APP_BLINK_process()        【应用层·闪烁状态机】计毫秒判到点
  *              └─ PER_LED_Toggle()         【感知层·统一接口】
  *                    └─ per_gpio_toggle()        【感知层·GPIO 驱动】
@@ -55,7 +55,7 @@ void app_led_init(void)
 }
 
 /*----------------------------------------------------------------------------
- * 函数功能：LED 应用任务体 —— 循环给状态机喂 1ms 节拍，驱动灯闪烁
+ * 函数功能：LED 应用任务体 —— 循环给状态机喂节拍（当前 10ms），驱动灯闪烁
  * 参数    ：argument —— 任务参数，未使用（创建时传的是 NULL）
  * 返回值  ：无（死循环，永不返回）
  * 调用处  ：由 FreeRTOS 调度器调用（app_task.c 里 osThreadNew 注册进来的）
@@ -68,9 +68,9 @@ void app_led_init(void)
  *              没有它，本任务会一直占着 CPU，其它任务（包括 defaultTask）
  *              永远得不到执行，表现为"程序像卡死了"
  *           ④ osDelay(APP_BLINK_TICK_MS) 的值就是节拍精度。
- *              FreeRTOSConfig.h 里节拍为 1000Hz，所以 osDelay(1) 正好是 1ms；
- *              改成 10 会让闪烁慢到 1/10
- *           ⑤ 实际间隔会比 1ms 略长（调度开销、其它任务抢占），
+ *              FreeRTOSConfig.h 里节拍为 1000Hz，osDelay(10) = 10ms；
+ *              改 APP_BLINK_TICK_MS 要与半周期保持整数倍关系（cfg_check 守）
+ *           ⑤ 实际间隔会比节拍值略长（调度开销、其它任务抢占），
  *              属于正常现象；对 LED 闪烁这种应用，毫秒级抖动完全可以忽略
  *----------------------------------------------------------------------------*/
 void app_led_task(void *argument)
@@ -84,11 +84,12 @@ void app_led_task(void *argument)
     for (;;)
     {
  #if APP_LED_TASK_ENABLE       
-        /* 推进闪烁状态机：数 1 个毫秒 */
+        /* 推进闪烁状态机：累加一个节拍（APP_BLINK_TICK_MS） */
         APP_BLINK_process();
 #endif
-        /* 延时 1ms：既是让出 CPU，也是状态机的节拍
-         * FreeRTOSConfig.h 里节拍为 1000Hz，所以 osDelay(1) 正好是 1ms */
+        /* 延时一个节拍：既是让出 CPU，也是状态机的节拍
+         * APP_BLINK_TICK_MS 当前为 10（1ms→10ms，唤醒降为 1/10，
+         * 见 cfg_param.h 的说明） */
         osDelay(APP_BLINK_TICK_MS);
     }
 }

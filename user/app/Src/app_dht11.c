@@ -8,11 +8,11 @@
  *
  *  任务的时间账（本册最需要算清楚的一笔）：
  *    每 2 秒一轮，其中真正占用 CPU 的只有
- *      起始信号 18 ms（忙等，必须连续占用）
- *      + 40 位读取约 4~5 ms（关中断）
- *      = 约 23 ms
- *    占 2 秒周期的 1.2%，其余时间都在 osDelay 里把 CPU 让出去。
- *    ★ 这也是"忙等 18 ms"能被接受的原因：它短、且有明确理由（时序不能断）。
+ *      40 位读取约 4~5 ms（关中断，忙等——必须连续占用）
+ *      = 约 5 ms
+ *    起始信号的 18 ms 已改走 osDelay（引脚电平由 ODR 硬件保持，
+ *    CPU 可以睡，见 per_dht11.c 的 dht11_start_low_wait），
+ *    占 2 秒周期的 0.25%，其余时间都在 osDelay 里把 CPU 让出去。
  *
  *  ★ 失败路径刻意什么都不做：
  *    读失败 → 不调 app_link → 灯保持上一次的状态。
@@ -33,6 +33,11 @@
 #include "app_link.h"
 #endif
 #include "mod_uart1.h"      /* 平台层：串口1 统一入口（打印只认它） */
+#if APP_OLED_ENABLE         /* 平台层之上的显示链：刷新 Temp/Hum 两行（2.9）
+                             * ★ include 也要跟着开关走：关掉 OLED 链时
+                             *   app_oled.c 不参与编译，调用点必须一起消失 */
+#include "app_oled.h"
+#endif
 #include "cmsis_os.h"       /* osDelay */
 #include <string.h>         /* memcpy（只用它搬字面常量，不引入 printf） */
 
@@ -261,6 +266,15 @@ void app_dht11_task(void *argument)
             /* ⓸ 打印：整数部分 + 一位小数 */
             n = build_th_line(buf, data.temperature_int, data.temperature_dec,
                                    data.humidity_int,    data.humidity_dec);
+
+            /* ⓸' 显示：同一组数顺手刷到 OLED 前两行（2.9）。
+             *     ★ 放在"快照更新之后"：屏上看到的数与上云读到的是同一组。
+             *     ★ 写屏在 app_oled.c 里拿 osMutex（100 ms 超时），拿不到就放弃
+             *       本帧——光敏任务可能正在写后两行，不让两条 I2C 事务交叠。 */
+#if APP_OLED_ENABLE
+            APP_OLED_UpdateTempHum(data.temperature_int, data.temperature_dec,
+                                   data.humidity_int,    data.humidity_dec);
+#endif
         }
         else
         {
@@ -268,6 +282,12 @@ void app_dht11_task(void *argument)
              *    灯保持现状，快照保持上一次的有效值（故障安全）。
              *    上云任务因此上报的仍是"最后一个可信值"，而不是 0。 */
             n = build_fail_line(buf, (uint8_t)PER_DHT11_GetLastFailStage());
+
+            /* ⓹' 显示：只把 Temp/Hum 两行写成 ERROR，Light/Level 两行不动 ——
+             *    一个传感器坏了，另一个照常显示（故障隔离在"行"这一级）。 */
+#if APP_OLED_ENABLE
+            APP_OLED_ShowError();
+#endif
         }
         buf[n] = '\0';
         MOD_UART1_SendString(buf);

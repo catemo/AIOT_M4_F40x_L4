@@ -25,6 +25,7 @@
 #include "gpio.h"
 #include "i2c.h"
 #include "spi.h"
+#include "adc.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -103,6 +104,10 @@ int main(void)
    *   cfg 开关关掉的是"用总线的模块"，没人用时 HAL 代码被 gc 回收。 */
   MX_I2C1_Init();
   MX_SPI1_Init();
+  /* 2.8 新增：ADC1（光敏传感器 PA5 = ADC1_IN5）。
+   *   与 I2C1 / SPI1 同一约定：ADC 属于 Core 公共外设，main 里无条件初始化；
+   *   cfg 开关关掉的是"用 ADC 的模块"（per_light），没人用时 HAL 代码被 gc 回收。 */
+  MX_ADC1_Init();
   /* ★ 排障探针：在调度器启动【之前】从 USART1 发一行。
    *   此刻没有 FreeRTOS、没有任务并发、没有 cfg 开关，链路上只有 huart1 与 HAL，
    *   所以这一行是判定"TX 引脚/接线/波特率"与"任务层打印"的分水岭：

@@ -1,4 +1,4 @@
-/**
+﻿/**
  ******************************************************************************
  * @file    cfg_param.h
  * @brief   cfg 横切配置层 —— 模块参数（按模块分小节）
@@ -16,11 +16,16 @@
 #define CFG_PARAM_H
 
 /* ---------- 公共节拍 ---------- */
-/* 状态机节拍(ms)：每 1ms 调用一次 APP_BLINK_process() 推进一次状态机。
+/* 状态机节拍(ms)：每 10ms 调用一次 APP_BLINK_process() 推进一次状态机。
  * 取值必须与 Core/Inc/FreeRTOSConfig.h 的 configTICK_RATE_HZ 对齐
  * （本工程 = 1000，即 1 tick = 1ms），因为 app_led 任务里用的是
- * osDelay(APP_BLINK_TICK_MS)——节拍改了而这里没改，闪烁就会整体变快变慢。 */
-#define APP_BLINK_TICK_MS       1
+ * osDelay(APP_BLINK_TICK_MS)——节拍改了而这里没改，闪烁就会整体变快变慢。
+ * ★ 1 → 10（2026-10-30 性能优化）：状态机只关心"到没到半周期"，
+ *   半周期 500 ms 用 10 ms 步进毫无感知差别，但 LED 任务的唤醒频率
+ *   从 1000 次/秒降到 100 次/秒——它是全系统最大唤醒源，省的是
+ *   每秒 900 次上下文切换（入栈/出栈/调度器开销）。
+ *   cfg_check.h 闸门照旧：半周期必须是本值的整数倍（500 % 10 = 0 ✓）。 */
+#define APP_BLINK_TICK_MS       10
 
 /* ---------- LED 闪烁参数 ---------- */
 /* LED1 半周期(ms)：每 500ms 翻转一次 → 1Hz 闪烁（亮 500ms + 灭 500ms）。
@@ -252,10 +257,42 @@
 #define APP_WDT_ALIVE_EVERY     4
 
 /* ---------- 看门狗任务栈 / 优先级 ----------
- * 栈 512（六个任务里最小）：链路最浅（app → per_iwdg → HAL 就到底），
+ * 栈 512（七个任务里最小）：链路最浅（app → per_iwdg → HAL 就到底），
  *   不用 printf，行缓冲只有几十字节。
  * ★ 单位仍是【字节】！512 = configMINIMAL_STACK_SIZE(128 字) × 4，是下限。 */
 #define APP_WDT_TASK_STACK_SIZE 512     /* 看门狗任务栈大小(字节) */
 #define APP_WDT_TASK_PRIO       1       /* 与其余任务平级：喂狗不该抢占采集与上云 */
+
+/* ---------- 光敏传感器链（PA5/ADC1_IN5，2.8 新增）参数 ----------
+ * 阈值方向由硬件决定：光敏电阻接地，光照越强 → 阻值越小 → ADC 越小。
+ *   所以 ADC 小 = 强光，ADC 大 = 暗光 —— 与"数大＝亮"的直觉相反。 */
+#define APP_LIGHT_TH_LOW        200U    /* 强光/中等分界：ADC < 200 → BRIGHT（双灯灭）      */
+#define APP_LIGHT_TH_HIGH       500U    /* 中等/暗光分界：ADC >= 500 → DARK（双灯亮）        */
+/* 200..499 为中等光（仅 LED2 亮）。
+ * ★ 两个阈值建议间隔 ≥200，避免临界值附近灯频繁闪；本册 300 的间隔足够。
+ *   手挡住时灯还不亮 → 把 TH_HIGH 调大（如 600、700）；
+ *   灯光照射时灯还不灭 → 把 TH_LOW 调大（如 300、400）。 */
+
+/* 采集周期(ms)：课件 2.8 取 500 ms。光敏是缓变量，500 ms 既跟得上
+ * 遮挡/照射这类人为变化，又不会让串口刷屏。 */
+#define APP_LIGHT_PERIOD_MS     500
+
+/* 滑动平均点数：4 点。单次 ADC 抖动（电源纹波、灯光频闪）会让等级在
+ * 阈值附近来回跳，4 点平均把随机抖动压下去；代价是响应慢约 0.75 s，
+ * 对光照这种缓变量完全可接受。取值 1~8（闸门在 cfg_check.h）。 */
+#define APP_LIGHT_FILTER_SIZE   4
+
+/* ---------- 光敏任务栈 / 优先级 ----------
+ * 栈 512（与看门狗任务同为最小档）：链路最浅（app → per_light → HAL），
+ *   不用 printf，只有一条 80 字节的打印行缓冲。
+ * ★ 单位仍是【字节】！512 = configMINIMAL_STACK_SIZE(128 字) × 4，是下限。 */
+#define APP_LIGHT_TASK_STACK_SIZE 512   /* 光敏采集任务栈大小(字节) */
+#define APP_LIGHT_TASK_PRIO       1     /* 与其余任务平级：500 ms 采集不该抢占别的工作 */
+
+/* ---------- OLED 显示链（SSD1306，PC4/PC5 软件 I2C，2.9 新增）参数 ----------
+ * 本链不新增任务：DHT11 任务与光敏任务各自在自己的节拍里顺手刷两行。 */
+#define NET_I2CSW_DELAY_US         2U    /* 软件 I2C 半周期(µs)：2 µs ≈ 250 kHz（SSD1306 上限 400 kHz）
+                                          * 花屏且确认不是抢总线时，把它调到 4（更慢更稳） */
+#define APP_OLED_LOCK_TIMEOUT_MS   100U  /* 写屏互斥锁等待上限(ms)：拿不到就放弃本帧，下个周期再来 */
 
 #endif /* CFG_PARAM_H */

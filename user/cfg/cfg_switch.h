@@ -48,6 +48,14 @@
                                  *   入口没了整条链就不成立，所以平台层不单设子开关、与总闸同生共死 */
 #define NET_UART1_ENABLE    (MOD_UART1_ENABLE && 1)   /* ③ 网络层 net_uart.c —— 字节流：DMA 循环 + IDLE 判帧 + 环形缓冲 */
 #define APP_UART1_ENABLE    (MOD_UART1_ENABLE && 1)   /* ① 应用层 app_cmd.c —— 业务：收命令 → 解析 → 调 APP_BLINK_* 控灯 */
+/* ---------- 串口链·十六进制帧（2.5 新增：8 字节帧 + CRC8，与文本行协议共存） ----------
+ * 它不是一条新链，而是串口链的应用层里多装的一台"解析器"：
+ *   同一条 USART1、同一个 app_cmd_task、同一份 MOD_UART1_* 收发，
+ *   每字节先喂帧解析器，不是帧头才轮到文本行解析器（分流在 app_cmd.c）。
+ * 所以开关挂在 APP_UART1_ENABLE 之下：关串口，帧协议自然一起消失。
+ *   解析器 protocol_hex.c（帧格式 + CRC8）
+ *   执行器 app_hex_cmd.c（功能码 / 寄存器 → 点灯 / 取值 → 应答帧） */
+#define APP_HEX_CMD_ENABLE  (APP_UART1_ENABLE && 1)   /* 0 = 只留文本命令，帧字节会被当文本处理 */
 
 /* ---------- DHT11 链（PG9 单总线 + TIM2 微秒底座；温度 → LED1，湿度 → LED2） ----------
  * 四层的 DHT11 链只有【两层】（app → perception），与 LED 链一致、与串口链不同：
@@ -126,6 +134,40 @@
 #define PER_IWDG_ENABLE     (MOD_WDG_ENABLE && 1)   /* 感知层 per_iwdg.c —— HAL_IWDG + RCC 复位标志 */
 #define APP_WATCHDOG_ENABLE (MOD_WDG_ENABLE && 1)   /* 应用层 app_watchdog.c —— 喂狗任务 + 卡死演示 */
 
+/* ---------- 光敏传感器链（PA5 = ADC1_IN5；光照 → LED1 / LED2，2.8 新增） ----------
+ * 四层的 光敏链 只有【两层】（app → perception），与 DHT11 链同构：
+ *   感知层 per_light.c —— 唯一直接碰 HAL_ADC / hadc1 的一层：查询式单次采集
+ *   应用层 app_light.c —— 业务：多久读一次、4 点平均、分级、控灯、打印
+ * ★ 为什么中间不设平台层：这条链没有"协议位 / 语义动作"这类中间知识，
+ *   硬塞一层只会多出几行纯转发代码（与 DHT11 / 看门狗链是同一条判据）。
+ * ★ 它横跨两条既有链：
+ *     借 LED 链点灯 —— LED1 走 APP_BLINK_On/Off（先退出 1 Hz 闪烁再点灯），
+ *                      LED2 直接走 PER_LED_On/Off；
+ *     借串口链打印 —— [Light] 行只认 MOD_UART1_SendString。
+ *   所以 APP_BLINK_ / PER_LED_ / MOD_UART1_ 必须保持 1（cfg_check.h 有闸门看着）。
+ * ★ 与参考工程 L5_xd 的差别：那边光敏在 PF7/ADC3_IN5 且有 EEPROM 校准；
+ *   本板按课件接 PA5/ADC1_IN5，且参数块没有光照字段 → 只做滑动平均、不做校准。 */
+#define MOD_LIGHT_ENABLE    1   /* 模块总开关：光敏链（置 0 = 采集、控灯、打印整体不参与编译） */
+#define PER_LIGHT_ENABLE    (MOD_LIGHT_ENABLE && 1)   /* 感知层 per_light.c —— PA5/ADC1_IN5 查询式采集 */
+#define APP_LIGHT_ENABLE    (MOD_LIGHT_ENABLE && 1)   /* 应用层 app_light.c —— 500 ms 采集 + 分级 + 控灯 + 打印 */
+
+/* ---------- OLED 显示链（SSD1306 0.96"，PC4=SCL / PC5=SDA 软件 I2C，2.9 新增） ----------
+ * 四层的 OLED 链有【三跳】（app → platform → network），与串口链同构：
+ *   应用层 app_oled.c    —— 显示什么：四行布局 / 互斥锁 / 整行定宽覆盖
+ *   平台层 mod_oled.c    —— 器件语义：SSD1306 初始化序列 / 命令与数据帧 / 6x8 与 8x16 字库
+ *   网络层 net_i2c_sw.c  —— 总线时序：起始 / 停止 / 写字节（不检测 ACK）
+ * ★ 平台层不单设子开关、与总闸同生共死（与串口链的 mod_uart1 同一写法）：
+ *   它是这条链的"器件入口"，入口没了整条链不成立。
+ * ★ 与参数链的 I2C1 一刀两断：OLED 走 PC4/PC5 软件 I2C，不占 PB8/PB9 的硬件总线，
+ *   "显示卡住"与"掉电保存卡住"不会互相传染。
+ * ★ 它横跨两条链：DHT11 任务刷 Temp/Hum 两行、光敏任务刷 Light/Level 两行。
+ *   关掉其中任一条，那两行停在最后一次的值，另一条照常刷新（刷新粒度是"行"）。
+ * ★ 显示初始化发生在 app_taskCreate() 里，所以 APP_TASK_ENABLE 必须为 1
+ *   （cfg_check.h 有闸门看着）。 */
+#define MOD_OLED_ENABLE     1   /* 模块总开关：OLED 显示链（置 0 = 显示代码整体不参与编译） */
+#define NET_I2C_SW_ENABLE   (MOD_OLED_ENABLE && 1)   /* 网络层 net_i2c_sw.c —— PC4/PC5 软件 I2C 总线 */
+#define APP_OLED_ENABLE     (MOD_OLED_ENABLE && 1)   /* 应用层 app_oled.c —— 四行布局 + 互斥锁 */
+
 /* ---------- 任务集中创建（不属于某条链，单独一个开关） ---------- */
 #define APP_TASK_ENABLE     1   /* 应用层 app_task.c —— 所有应用任务的"排班表" */
 
@@ -142,10 +184,16 @@
  *   "HAL_IWDG_Init undefined"，按 docs/tutorials/t05 的说明把那行加回去即可。 */
 #define HAL_IWDG_MODULE_ENABLE   1   /* HAL IWDG 驱动编入（与 hal_conf 的 ENABLED 成对出现） */
 
+/* 与上面同一条约定（2.8 光敏链新增）：本宏与 Core/Inc/stm32f4xx_hal_conf.h 的
+ * HAL_ADC_MODULE_ENABLED 成对出现。hal_conf.h 是 CubeMX 生成文件，
+ * 若重新生成把该行冲回注释态，编译期会报 HAL_ADC_Init undefined，
+ * 按 docs/tutorials/t08 的说明把那行加回去即可。 */
+#define HAL_ADC_MODULE_ENABLE    1   /* HAL ADC 驱动编入（与 hal_conf 的 ENABLED 成对出现） */
+
 /* ==========================================================================
- *  二、两级开关怎么用（十个真实场景，全部实测过能编能跑，照着改就行）
+ *  二、两级开关怎么用（十二个真实场景，全部实测过能编能跑，照着改就行）
  *
- *  ★★ 先认清七条链的依赖关系，否则改开关必撞闸门 ★★
+ *  ★★ 先认清九条链的依赖关系，否则改开关必撞闸门 ★★
  *
  *     串口链   ──借 APP_BLINK_* 点灯──> LED 链
  *     DHT11 链 ─借 PER_LED_* 点灯────> LED 链    （APP_LINK 跨链）
@@ -156,32 +204,40 @@
  *     存储链·日志 ─借 MOD_UART1_* 打印─> 串口链
  *     存储链·日志 ─借 APP_DHT11_* 取快照─> DHT11 链（闸门看着）
  *     看门狗链 ─借 MOD_UART1_* 打印──> 串口链    （2.4，闸门看着）
+ *     光敏链   ─借 APP_BLINK/PER_LED 点灯──> LED 链（2.8，闸门看着）
+ *     光敏链   ─借 MOD_UART1_* 打印──> 串口链    （2.8，闸门看着）
  *     串口链   ─HANG 命令置罢工标志──> 看门狗链  （跨链合流点 s_hang_request）
- *     LED 链是七条里最底的一条：串口命令要经它的状态机点灯，DHT11 联动与
- *    云端命令要经它的感知层点灯。★ 所以"一键断 LED 链"在本工程【不成立】——
- *    MOD_LED_ENABLE 改 0 会同时撞上两条闸门：
+ *     OLED 链  ─由 DHT11 任务刷 Temp/Hum 行──> DHT11 链（2.9，关 DHT11 则两行定格）
+ *     OLED 链  ─由光敏任务刷 Light/Level 行──> 光敏链 （2.9，关光敏则两行定格）
+ *     ★ OLED 链【不借串口打印、不借 LED 点灯】，只吃两条采集任务的调用点；
+ *       两条采集链都在时它才有完整内容，但它自己可以独立关掉（场景⑫）。
+ *     LED 链是九条里最底的一条：串口命令要经它的状态机点灯，DHT11 联动、
+ *     上云命令与光敏分级都要经它的感知层 / 状态机点灯。
+ *     ★ 所以"一键断 LED 链"在本工程【不成立】——
+ *    MOD_LED_ENABLE 改 0 会同时撞上多条闸门：
  *        APP_UART1_ENABLE requires APP_BLINK_ENABLE
  *        APP_LINK_ENABLE  requires PER_LED_ENABLE
+ *        APP_LIGHT_ENABLE requires APP_BLINK_ENABLE / PER_LED_ENABLE
  *    真想不带 LED，得把串口链与联动一起断掉（等于换个项目了）。
- *    这不是设计缺陷，是"七条链共用两个合流点"的必然结果。
+ *    这不是设计缺陷，是"九条链共用两个合流点"的必然结果。
  *
  *  --------------------------------------------------------------------
  *    场景① 只要串口控灯、不要自动闪：
  *            APP_LED_ENABLE  末尾的 1 改 0     ← 只是不自动闪烁
  *            MOD_LED_ENABLE  保持 1            ← 下半段（APP_BLINK + PER_LED）必须在
- *          → 实测 FLASH 73300 B / RAM 42216 B（省 220 B）
+ *          → 实测 FLASH 81664 B / RAM 42312 B（省 236 B）
  *          ★ 反过来"只留串口、不要 LED"【不成立】：命令最终要落到 APP_BLINK。
  *
  *    场景② 只留 DHT11 采集、不要 LED 联动（把 DHT11 当纯采集器用）：
  *            APP_LINK_ENABLE  末尾的 1 改 0
  *            MOD_DHT11_ENABLE 保持 1            ← 采集与打印照常
- *          → 实测 FLASH 73128 B / RAM 42216 B（省 392 B）
+ *          → 实测 FLASH 81596 B / RAM 42312 B（省 304 B）
  *          串口仍每 2 秒打印一行温湿度，但两颗灯都不动。
  *          ★ 反过来"只要联动、不要采集"【不成立】：联动的输入就是采集结果。
  *
  *    场景③ 关整条 DHT11 链（回到 1.3 章节的功能集 + 上云 + 存储）：
  *            MOD_DHT11_ENABLE  改 0     ← 五个子开关自动跟着变 0
- *          → 实测 FLASH 66164 B / RAM 42184 B（省 7356 B FLASH / 32 B RAM）
+ *          → 实测 FLASH 74104 B / RAM 42280 B（省 7796 B FLASH / 32 B RAM）
  *          ★ 日志应用层会【自动】跟着关：APP_LOGGER_ENABLE = (MOD_FLASH_ENABLE
  *            && APP_DHT11_ENABLE)——环形日志记的就是 DHT11 快照。不需要你再去
  *            手动关 NET_SPI_ENABLE；参数链（EEPROM）不受影响，照常编入。
@@ -191,19 +247,19 @@
  *    场景④ 只留 DHT11 感知层（想省 Flash、或做最小验证）：
  *            APP_DHT11_ENABLE / APP_LINK_ENABLE  末尾的 1 改 0
  *            PER_DELAY_ENABLE / PER_DHT11_ENABLE 保持 1
- *          → 实测 FLASH 66164 B / RAM 42184 B —— 与场景③【完全相同】。
+ *          → 实测 FLASH 74104 B / RAM 42280 B —— 与场景③【完全相同】。
  *          ★ 这个"相同"不是巧合，而是 --gc-sections 的验收单：
  *            留下的两个感知层文件没有任何调用点，被 100% 回收。
  *
  *    场景⑤ 关整条上云链（回到 1.4 章节的功能集 + 存储 + 看门狗）：
  *            MOD_WIFI_ENABLE  改 0     ← 六个子开关自动跟着变 0
- *          → 实测 FLASH 59652 B / RAM 39104 B（省 13868 B FLASH / 3112 B RAM）
+ *          → 实测 FLASH 68012 B / RAM 39200 B（省 13888 B FLASH / 3112 B RAM）
  *          ★ 这是本册最常用的一档：本地采集、联动、串口命令、存储、看门狗全都还在，
  *            只是不再上网。也是"取体积基准"时的对照档。
  *
  *    场景⑥ 只裁上云应用层（保留报文层与 AT 层）：
  *            APP_MQTT_ENABLE  末尾的 1 改 0
- *          → 实测 FLASH 59652 B / RAM 39880 B
+ *          → 实测 FLASH 68012 B / RAM 39976 B
  *            FLASH 与场景⑤ 相同：没人调用的 mod_mqtt / mod_wifi / net_esp8266
  *            被 gc 100% 回收（又一次验收"开关不删文件"能成立）。
  *            ★ 但 RAM 比场景⑤【多 776 B】—— 这是 UART3 实例的 DMA 缓冲与
@@ -211,40 +267,76 @@
  *              只要 NET_UART3_ENABLE 还是 1，表里就有一个指向它的表项，
  *              gc 不敢动。想真省 RAM，得关总闸（场景⑤）。
  *
- *    场景⑦ 彻底不带串口（会连带撞 DHT11 / 上云 / 存储 / 看门狗四条链的闸门）：
+ *    场景⑦ 彻底不带串口（会连带撞 DHT11 / 上云 / 存储 / 看门狗 / 光敏五条链的闸门）：
  *            MOD_UART1_ENABLE 改 0 时，必须把"借串口打印"的链一起处理掉：
- *            MOD_DHT11_ENABLE / MOD_WIFI_ENABLE / MOD_WDG_ENABLE 改 0，
+ *            MOD_DHT11_ENABLE / MOD_WIFI_ENABLE / MOD_WDG_ENABLE / MOD_LIGHT_ENABLE 改 0，
  *            NET_I2C_ENABLE / NET_SPI_ENABLE 改 0（存储两条链也打日志行）。
  *          否则撞闸门：APP_DHT11_ENABLE requires MOD_UART1_ENABLE（依次还有
- *          APP_WATCHDOG / storage chain 两条）
- *          → 实测 FLASH 31132 B / RAM 38480 B（七条链只剩 LED）
+ *          APP_WATCHDOG / storage chain / APP_LIGHT 三条）
+ *          → 实测 FLASH 32684 B / RAM 38552 B（八条链只剩 LED）
  *
- *    场景⑧ 裸机骨架（七条链全关，只剩 CubeMX + FreeRTOS 空转）：
+ *    场景⑧ 裸机骨架（九条链全关，只剩 CubeMX + FreeRTOS 空转）：
  *            MOD_LED_ENABLE / MOD_UART1_ENABLE / MOD_DHT11_ENABLE / MOD_WIFI_ENABLE 都改 0
- *            NET_I2C_ENABLE / NET_SPI_ENABLE / MOD_WDG_ENABLE 都改 0
- *            HAL_UART_MODULE_ENABLE 改 0
+ *            NET_I2C_ENABLE / NET_SPI_ENABLE / MOD_WDG_ENABLE / MOD_LIGHT_ENABLE 都改 0
+ *            MOD_OLED_ENABLE  改 0    ← 2.9 新增：它要求 APP_TASK_ENABLE=1（闸门看着）
+ *            HAL_UART_MODULE_ENABLE 改 0        ← 只改 cfg 这个（不带 D 的）
  *            APP_TASK_ENABLE  改 0     ← 必须一起改，否则撞最后那条闸门
- *          → 实测 FLASH 30712 B / RAM 38472 B
+ *          → 实测 FLASH 32272 B / RAM 38544 B
+ *            （比 2.7 时代的 30712 B 多 1560 B：ADC 底座约 1520 B + idle hook/STACK 40 B；
+ *             ADC 与 TIM2 一样挂在 Core 里由 main() 启动，开关关不掉）
  *          ★ 与场景⑦ 只差 412 B：剩下的都是 Core 层与 HAL 的固定开销，
  *            开关根本动不了它们（见下面最后一节）。
+ *          ★★ 两个名字只差一个 D，不能搞混（2026-10-30 实测）：
+ *              cfg 的 HAL_UART_MODULE_ENABLE 改 0 —— 可以编，链接通过；
+ *              hal_conf.h 的 HAL_UART_MODULE_ENABLED 关掉 —— 必炸：
+ *              Core 生成文件 usart.h / stm32f4xx_it.c 无条件引用 UART 类型。
+ *              所以 hal_conf 那行保持 1 不动（.ioc 重生成也不会碰它）。
  *
  *    场景⑨ 关开关时 APP_TASK_ENABLE 要不要跟着改，看"还剩几个任务要建"：
- *          本例有六个任务——app_led_task（LED 链）、app_cmd_task（串口链）、
- *          app_dht11_task（DHT11 链）、app_mqtt_task（上云链）、
+ *          本例有七个任务——app_led_task（LED 链）、app_cmd_task（串口链）、
+ *          app_dht11_task（DHT11 链）、app_light_task（光敏链）、app_mqtt_task（上云链）、
  *          app_storage_task（存储两条链）、app_watchdog_task（看门狗链）。
  *          cfg_check.h 里那条校验是"APP_TASK 至少要有一个任务可建"：
- *            - 只关一条链（另外六条还在）  → APP_TASK_ENABLE 保持 1
- *            - 七条链都关（裸机骨架）      → APP_TASK_ENABLE 必须改 0，否则 #error
+ *            - 只关一条链（另外八条还在）  → APP_TASK_ENABLE 保持 1
+ *            - 九条链都关（裸机骨架）      → APP_TASK_ENABLE 必须改 0，否则 #error
+ *          ★ OLED 链不建任务，但它把初始化挂在 app_taskCreate() 里，
+ *            所以"OLED 开着、APP_TASK 关着"是另一种 #error（见场景⑫）。
  *
  *    场景⑩ 关整条看门狗链（2.4 新增；调试期不想被狗打扰时最常用）：
  *            MOD_WDG_ENABLE  改 0     ← PER_IWDG / APP_WATCHDOG 自动跟着变 0
- *          → 实测 FLASH 72152 B / RAM 42200 B（省 1368 B FLASH / 16 B RAM）
+ *          → 实测 FLASH 80512 B / RAM 42296 B（省 1388 B FLASH / 16 B RAM）
  *          ★ RAM 只少 16 B 不是 bug：512 B 任务栈是从 FreeRTOS 堆【运行时】
  *            分配的，关掉后静态增量只剩 s_hiwdg(8B) + s_hang_request(1B) + 句柄。
  *          ★ 只裁应用层（APP_WATCHDOG_ENABLE 末尾改 0）与关总闸体积【完全相同】：
  *            留下的 per_iwdg 没有任何调用点，被 gc 100% 回收——与场景④同一条验收单。
  *          ★ 反向操作会撞闸门：只关 HAL_IWDG_MODULE_ENABLE 而链还开着 → #error
  *            （实测触发；hal_conf.h 那行使能被 CubeMX 重生成冲掉时是同一种报错）。
+ *
+ *    场景⑪ 关整条光敏链（2.8 新增；不接光敏模块、或只想看温湿度时最常用）：
+ *            MOD_LIGHT_ENABLE  改 0   ← PER_LIGHT / APP_LIGHT 自动跟着变 0
+ *          → 实测 FLASH 79156 B / RAM 42288 B（省 2744 B FLASH / 24 B RAM）
+ *          ★ 只裁应用层（APP_LIGHT_ENABLE 末尾改 0）与关总闸体积【完全相同】：
+ *            留下的 per_light 没有调用点，被 gc 100% 回收（第三次验收单）。
+ *          ★ ADC 底座（adc.c + HAL ADC）**不会**被回收：它由 main() 的
+ *            MX_ADC1_Init() 无条件调用，与 TIM2 底座同一条纪律；
+ *            所以关光敏链只能省 2744 B，不是整个 ADC 的价钱。
+ *          ★ 反向操作会撞闸门：只关 HAL_ADC_MODULE_ENABLE 而链还开着 → #error
+ *            （实测报文：PER_LIGHT_ENABLE requires HAL_ADC_MODULE_ENABLE）。
+ *
+ *    场景⑫ 关整条 OLED 链（2.9 新增；没接屏、或只想看串口日志时最常用）：
+ *            MOD_OLED_ENABLE  改 0   ← NET_I2C_SW / APP_OLED 自动跟着变 0
+ *          → 实测 FLASH 81900 B / RAM 42312 B（省 3372 B FLASH / 8 B RAM）
+ *          ★ 屏上四行全部停在最后一次的值（屏由外部供电，不会自己清空）；
+ *            DHT11 / 光敏两条链照常采集、照常打印、照常控灯——只是不再写屏。
+ *          ★ 只裁应用层（APP_OLED_ENABLE 末尾改 0）与关总闸体积【完全相同】：
+ *            留下的 mod_oled / net_i2c_sw 没有调用点，被 gc 100% 回收
+ *            （第四次验收单，与场景④ / ⑦ / ⑪ 同一条纪律）。
+ *          ★ 关掉它不会碰 I2C1（PB8/PB9 的 AT24C02 参数链）：OLED 走的是
+ *            PC4/PC5 软件 I2C，两套总线一根线都不共用。
+ *          ★ 反向操作会撞闸门：只关 NET_I2C_SW_ENABLE 而链还开着 → #error
+ *            （实测报文：MOD_OLED_ENABLE requires NET_I2C_SW_ENABLE）；
+ *            关 APP_TASK_ENABLE 而 OLED 还开着 → #error
+ *            （初始化挂在 app_taskCreate()，任务表没了就没人初始化屏）。
  *
  *  ★ 这套闸门的目的只有一个：与其让编译过了、运行期莫名其妙，
  *    不如让人在改开关时就把依赖关系想清楚。每一条 #error 都是一次提醒。
@@ -256,7 +348,7 @@
  *    MX_USART1_UART_Init、MX_USART3_UART_Init 与 HAL_UART_Init 依然出现在 .elf 里
  *    （真正被 gc 掉的只是没人调用的 HAL_UART_Transmit）。
  *    ★ 本册新增 USART3 之后，这一块的固定开销从 584 B 起（含 DMA1 与 NVIC），
- *      所以场景⑦/⑧ 的 28~29 KB 里有相当一部分是 Core 层与 HAL 的固定开销，
+ *      所以场景⑦/⑧ 的 32~33 KB 里有相当一部分是 Core 层与 HAL 的固定开销，
  *      不能与 1.4 章节记的 27048 B 直接比——那时的 Core 里还没有 USART3。
  * ========================================================================== */
 

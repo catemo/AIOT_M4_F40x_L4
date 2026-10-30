@@ -5,7 +5,8 @@
  *
  *  本文件职责：实现"功能"，也就是"闪烁"这件事本身，但不知道具体是哪块板子。
  *    - 每颗 LED 一个独立的闪烁计时器：数够半周期就翻转一次
- *    - 谁去数？由 app_led 的任务每 1ms 调一次 APP_BLINK_process()
+ *    - 谁去数？由 app_led 的任务每 APP_BLINK_TICK_MS（当前 10ms）
+ *      调一次 APP_BLINK_process()
  *      （这个"固定节拍"约定就是本文件对上层的要求）
  *
  *  三者的分工：
@@ -75,12 +76,16 @@ uint8_t APP_BLINK_blink_set(APP_BLINK_LED_t led, uint16_t half_period_ms);
  * 函数功能：LED 闪烁周期处理 —— 给每颗灯计毫秒，到点就翻转它（闪烁的心脏）
  * 参数    ：无
  * 返回值  ：APP_BLINK_OK(0)（固定返回成功；本函数不做参数校验，不会失败）
- * 调用处  ：app_led.c 的 app_led_task() 任务循环里，每 1ms 调一次
+ * 调用处  ：app_led.c 的 app_led_task() 任务循环里，每 APP_BLINK_TICK_MS
+ *           （当前 10ms）调一次
  *           （完整调用链：app_led_task → APP_BLINK_process →
  *             PER_LED_Toggle → per_gpio_toggle → HAL_GPIO_TogglePin）
- * 注意事项：① ★ 必须由"固定 1ms 节拍"调用，这是本文件对上层唯一的硬要求。
+ * 注意事项：① ★ 必须由"固定节拍"调用（cfg_param.h 的 APP_BLINK_TICK_MS，
+ *              当前 10ms），这是本文件对上层唯一的硬要求。
  *              调得太慢（比如 osDelay 写大了），闪烁会整体变慢；
- *              调得太快，闪烁会整体变快；忽快忽慢则闪烁节奏会抖动
+ *              调得太快，闪烁会整体变快；忽快忽慢则闪烁节奏会抖动。
+ *              节拍从 1ms 放宽到 10ms（2026-10-30）：半周期 500ms 下
+ *              肉眼无差别，LED 任务唤醒降为 1/10。
  *           ② 本函数是"非阻塞"的：进去就出来，不做任何延时，
  *              所以放在任务循环里不会影响同一任务的其它工作
  *           ③ 只有被 APP_BLINK_blink_set() 设置过的灯才会动，

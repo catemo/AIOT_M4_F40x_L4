@@ -1,9 +1,12 @@
 [submodule "docs"]
 	path = docs
 	# 相对路径：父仓库 clone 到哪一侧，子模块就去哪一侧拉
-	#   Gitee  : https://gitee.com/catemo/AIOT_M4_F40x_L4.git  -> .../AIOT_M4_F40x_L4-docs.git
-	#   GitHub : git@github.com:catemo/AIOT_M4_F40x_L4.git     -> .../AIOT_M4_F40x_L4-docs.git
+	#   Gitee  : https://gitee.com/catemo/AIOT_M4_F40x_L4a.git  -> .../AIOT_M4_F40x_L4a-docs.git
+	#   GitHub : git@github.com:catemo/AIOT_M4_F40x_L4.git      -> .../AIOT_M4_F40x_L4-docs.git
 	# ★ 两侧【仓库名必须一致】：改名时必须两边同时改，且父仓与 -docs 仓同步改。
 	#   只改一侧 → 另一侧的 submodule 解析失效（clone --recurse-submodules 必失败）。
 	#   见 gitmodules(5) 相对 URL 规则：../X 会相对于父仓 URL 解析。
-	url = ../AIOT_M4_F40x_L4-docs.git
+	# ⚠ 2026-10-30：Gitee 侧已改名 AIOT_M4_F40x_L4a / AIOT_M4_F40x_L4a-docs；
+	#   GitHub 侧仍是旧名 AIOT_M4_F40x_L4 / AIOT_M4_F40x_L4-docs —— 需同步改名，
+	#   否则从 GitHub clone --recurse-submodules 会去解析不存在的 -a-docs 仓。
+	url = ../AIOT_M4_F40x_L4a-docs.git

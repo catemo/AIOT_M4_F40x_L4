@@ -62,7 +62,15 @@
 #define configUSE_PREEMPTION                     1
 #define configSUPPORT_STATIC_ALLOCATION          1
 #define configSUPPORT_DYNAMIC_ALLOCATION         1
-#define configUSE_IDLE_HOOK                      0
+/* ★ 空闲钩子已打开（2026-10-30 性能优化）：vApplicationIdleHook 定义在
+ *   user/app/Src/app_task.c，里面只做一件事 —— __WFI() 进 Sleep 模式。
+ *   本固件任务负载占空比 <10%，不开钩子时 idle 任务在 168 MHz 下空转烧电；
+ *   开启后空闲期 CPU 睡眠，任一中断（SysTick 1kHz / TIM6 1kHz / 串口 IDLE）
+ *   唤醒继续跑。SLEEPDEEP 复位默认 0 → 只进 Sleep 不进 STOP：
+ *   外设时钟保持（TIM2 微秒计数照跑）、RAM 保持，唤醒后无恢复代码要执行。
+ * ⚠ 本行在 CubeMX 生成区（不在 USER CODE 内）：重新生成代码会被改回 0，
+ *   需要重新核对 —— 与 i2c.c 的 100 kHz ClockSpeed 同一条注意事项。 */
+#define configUSE_IDLE_HOOK                      1
 #define configUSE_TICK_HOOK                      0
 #define configCPU_CLOCK_HZ                       ( SystemCoreClock )
 #define configTICK_RATE_HZ                       ((TickType_t)1000)

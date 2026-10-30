@@ -11,22 +11,26 @@
  *   应用层 app        app_led.c / app_blink.c / app_cmd.c / app_task.c
  *                     app_dht11.c / app_link.c / app_mqtt.c
  *                     app_param.c / app_logger.c / app_watchdog.c
- *                                            业务：闪多快 / 命令解析 / 周期采集 / 阈值联动 / 上云 / 存储 / 喂狗
+ *                     protocol_hex.c / app_hex_cmd.c（2.5 十六进制帧）
+ *                     app_light.c（2.8 光敏传感器）
+ *                     app_oled.c（2.9 OLED 显示传感器数据）
+ *                                            业务：闪多快 / 命令解析 / 周期采集 / 阈值联动 / 上云 / 存储 / 喂狗 / 光照分级 / 显示布局
  *   平台层 platform   mod_uart1.c / mod_wifi.c / mod_mqtt.c
  *                     mod_eeprom.c / mod_flash.c
- *                                            接口：串口1 入口 / WiFi 五个动作 / MQTT 报文 / 存储器件语义
+ *                     mod_oled.c（2.9 SSD1306 驱动）
+ *                                            接口：串口1 入口 / WiFi 五个动作 / MQTT 报文 / 存储器件语义 / 显示器件语义
  *   网络层 network    net_uart.c（实例表：USART1 + USART3）/ net_esp8266.c
- *                     net_i2c.c / net_spi.c
- *                                            收发：DMA+IDLE+环形缓冲 / AT 会话 / I2C 时序 / SPI 包络
+ *                     net_i2c.c / net_spi.c / net_i2c_sw.c（2.9 软件 I2C）
+ *                                            收发：DMA+IDLE+环形缓冲 / AT 会话 / I2C 时序 / SPI 包络 / 软件 I2C 时序
  *   感知层 perception per_led.c / per_gpio.c / per_dht11.c / per_delay.c
- *                     per_iwdg.c
- *                                            硬件：灯引脚表 / 单总线时序 / µs 时基 / IWDG 与复位标志
+ *                     per_iwdg.c / per_light.c（2.8）
+ *                                            硬件：灯引脚表 / 单总线时序 / µs 时基 / IWDG 与复位标志 / PA5 ADC 采集
  *   cfg 横切          module_cfg.h + 4 个子文件   配置：开关与参数（本文件）
  *  ==================================================================
  *  命令只能从上往下传（应用层 → 感知层），下层永远不知道上层存在。
  *  应用层可直达感知层（本地闭环，如按键控灯），禁止回头与横调。
  *
- *  七条链、两个合流点：
+ *  九条链、两个合流点：
  *    LED 链    app_blink → per_led → per_gpio                  （两跳）
  *    串口链    app_cmd → mod_uart1 → net_uart(USART1)          （三跳）
  *    DHT11 链  app_dht11 → per_dht11                           （两跳，联动 app_link 借 per_led 点灯）
@@ -35,10 +39,14 @@
  *    参数链    app_param → mod_eeprom → net_i2c(I2C1)          （三跳，2.3 新增：AT24C02）
  *    日志链    app_logger → mod_flash → net_spi(SPI1)          （三跳，2.3 新增：W25Q64）
  *    看门狗链  app_watchdog → per_iwdg                          （两跳，2.4 新增：片上外设不占引脚）
+ *    光敏链    app_light → per_light（PA5 = ADC1_IN5）            （两跳，2.8 新增：光敏传感器）
+ *    OLED 链   app_oled → mod_oled → net_i2c_sw（PC4/PC5）        （三跳，2.9 新增：0.96" SSD1306）
  *    ★ 日志链的应用层挂在 DHT11 上：APP_LOGGER_ENABLE = (MOD_FLASH_ENABLE && APP_DHT11_ENABLE)
  *      ——环形日志记的就是 DHT11 快照，所以关 DHT11 链时日志应用层自动跟关
  *      （参数链 app_param 不受影响，仍随 NET_I2C_ENABLE 走）。
- *    ★ 串口 / DHT11 / 上云 / 存储 / 看门狗五条链共用 MOD_UART1_* 打印出口，
+ *    ★ OLED 链是"显示出口"，不占串口链的打印额度：DHT11 任务与光敏任务各自
+ *      在采集完成后顺手刷两行（写屏用 osMutex 串行化，见 app_oled.c）。
+ *    ★ 串口 / DHT11 / 上云 / 存储 / 看门狗 / 光敏六条链共用 MOD_UART1_* 打印出口，
  *      手动命令与自动闪烁则在 APP_BLINK_* 处互斥（合流点①），
  *      温度联动与自动闪烁在 per_led 处按边沿写灯（合流点②，见 app_link.c）。
  *
@@ -47,8 +55,11 @@
  *  1 Hz 闪烁 + 串口控灯（USART1）+ 每 2 秒温湿度采集与阈值联动
  *  + 每 5 秒 MQTT 上报华为云（USART3 → ESP8266 → 1883）
  *  + EEPROM 参数块（I2C1: PB8/PB9）与 W25Q64 环形日志（SPI1: PB3/4/5 + PG10）；
- *  FreeRTOS 任务由 app_task.c 集中创建（LED / 串口命令 / DHT11 采集 / 上云 / 存储 / 看门狗，
- *  共 6 个，存储任务一个驱动参数与日志两条链）。
+ *  + 光敏传感器（PA5/ADC1_IN5）每 500 ms 采集、分级并联动两颗灯；
+ *  + OLED（SSD1306 128×64，PC4=SCL / PC5=SDA 软件 I2C，2.9 新增）四行 8x16 大字：
+ *    Temp/Hum 由 DHT11 任务刷、Light/Level 由光敏任务刷，两个任务共用一把 osMutex。
+ *  FreeRTOS 任务由 app_task.c 集中创建（LED / 串口命令 / DHT11 采集 / 光敏 / 上云 / 存储 / 看门狗，
+ *  共 7 个，存储任务一个驱动参数与日志两条链；OLED 不新增任务，挂在已有两条采集任务上）。
  *
  *  ★ 本文件是"总入口"，配置按【职责】拆成 4 个子文件——各管一摊，
  *    要改哪一类就进哪个文件，改坏了也碰不到别的：

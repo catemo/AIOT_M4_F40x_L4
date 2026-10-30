@@ -37,8 +37,8 @@
 #error "APP_LED_ENABLE requires APP_BLINK_ENABLE"  /* 业务要靠闪烁状态机干活，两者必须同开 */
 #endif
 
-#if APP_TASK_ENABLE && !APP_LED_ENABLE && !APP_UART1_ENABLE && !APP_DHT11_ENABLE && !APP_MQTT_ENABLE && !APP_LOGGER_ENABLE && !APP_WATCHDOG_ENABLE
-#error "APP_TASK_ENABLE requires APP_LED_ENABLE or APP_UART1_ENABLE or APP_DHT11_ENABLE or APP_MQTT_ENABLE or APP_LOGGER_ENABLE or APP_WATCHDOG_ENABLE"   /* 至少要有一个任务可建，否则排班表是空的 */
+#if APP_TASK_ENABLE && !APP_LED_ENABLE && !APP_UART1_ENABLE && !APP_DHT11_ENABLE && !APP_MQTT_ENABLE && !APP_LOGGER_ENABLE && !APP_WATCHDOG_ENABLE && !APP_LIGHT_ENABLE
+#error "APP_TASK_ENABLE requires APP_LED_ENABLE or APP_UART1_ENABLE or APP_DHT11_ENABLE or APP_MQTT_ENABLE or APP_LOGGER_ENABLE or APP_WATCHDOG_ENABLE or APP_LIGHT_ENABLE"   /* 至少要有一个任务可建，否则排班表是空的 */
 #endif
 
 /* ==========================================================================
@@ -68,6 +68,22 @@
 
 #if MOD_UART1_ENABLE && !HAL_UART_MODULE_ENABLE
 #error "MOD_UART1_ENABLE requires HAL_UART_MODULE_ENABLE"   /* 还须 hal_conf.h 里打开 HAL_UART_MODULE_ENABLED */
+#endif
+
+/* ---------- 十六进制帧（2.5 新增，3 条回归闸门） ----------
+ * 帧协议挂在串口链里面（APP_HEX_CMD_ENABLE = APP_UART1_ENABLE && 1），
+ * 正常配置下这三条永远不会响；留着是防止有人把它改成独立数值后
+ * 出现"帧解析器编进来了、但没有点灯接口 / 没有收发通道"的悬挂配置。 */
+#if APP_HEX_CMD_ENABLE && !APP_UART1_ENABLE
+#error "APP_HEX_CMD_ENABLE requires APP_UART1_ENABLE"   /* 帧解析的字节来源就是串口命令任务 */
+#endif
+
+#if APP_HEX_CMD_ENABLE && !APP_BLINK_ENABLE
+#error "APP_HEX_CMD_ENABLE requires APP_BLINK_ENABLE"   /* LED_CTRL 的 LED1 必须经闪烁状态机，避免抢灯 */
+#endif
+
+#if APP_HEX_CMD_ENABLE && !MOD_UART1_ENABLE
+#error "APP_HEX_CMD_ENABLE requires MOD_UART1_ENABLE"   /* 应答帧只认 MOD_UART1_* 出口 */
 #endif
 
 /* ==========================================================================
@@ -407,6 +423,124 @@
 /* 看门狗任务优先级范围：与其余任务同一条规则 */
 #if APP_WATCHDOG_ENABLE && ((APP_WDT_TASK_PRIO < 1) || (APP_WDT_TASK_PRIO >= 56))
 #error "APP_WDT_TASK_PRIO requires 1 .. (configMAX_PRIORITIES - 1), configMAX_PRIORITIES = 56"
+#endif
+
+/* ==========================================================================
+ *  十三、光敏链依赖校验（2.8 新增，5 条：应用层 → 感知层 → HAL，含两条跨链）
+ *  ★ 光敏链只有两层（app_light → per_light），却横跨 LED 链与串口链：
+ *    它的灯要落到 APP_BLINK / PER_LED，打印要落到 MOD_UART1。
+ *    这些跨链依赖在代码里只是几行 include / 调用，漏配要到链接期才炸，
+ *    所以全部写成编译期闸门。
+ * ========================================================================== */
+
+/* ① 采集要落到 ADC 驱动 */
+#if APP_LIGHT_ENABLE && !PER_LIGHT_ENABLE
+#error "APP_LIGHT_ENABLE requires PER_LIGHT_ENABLE"   /* 业务读的是 per_light 的原始 ADC 值 */
+#endif
+
+/* ② 感知层要 HAL 的 ADC 驱动真的被编进来（与 UART / IWDG 同一条规矩） */
+#if PER_LIGHT_ENABLE && !HAL_ADC_MODULE_ENABLE
+#error "PER_LIGHT_ENABLE requires HAL_ADC_MODULE_ENABLE"   /* 还须 hal_conf.h 里打开 HAL_ADC_MODULE_ENABLED */
+#endif
+
+/* ③ LED1 必须经闪烁状态机（跨链依赖）：
+ *    直接写引脚会被 1 Hz 闪烁下一个节拍翻转掉，表现为"点亮又自己灭了" */
+#if APP_LIGHT_ENABLE && !APP_BLINK_ENABLE
+#error "APP_LIGHT_ENABLE requires APP_BLINK_ENABLE"   /* LED1 要先退出闪烁再点灯，否则与状态机抢灯 */
+#endif
+
+/* ④ LED2 落到感知层门卫（跨链依赖） */
+#if APP_LIGHT_ENABLE && !PER_LED_ENABLE
+#error "APP_LIGHT_ENABLE requires PER_LED_ENABLE"   /* LED2 直接经 per_led 点灯 */
+#endif
+
+/* ⑤ 打印要走串口链的平台层入口（与 app_dht11 / 存储链同一条规矩） */
+#if APP_LIGHT_ENABLE && !MOD_UART1_ENABLE
+#error "APP_LIGHT_ENABLE requires MOD_UART1_ENABLE"   /* [Light] 日志行只认 MOD_UART1_* 出口 */
+#endif
+
+/* ==========================================================================
+ *  十四、光敏链参数体检（2.8 新增，6 条）
+ *  这几条都是"能编过、跑起来才发现不对"的组合：阈值反了灯永远不亮、
+ *  滤波点数越界除 0、任务栈溢出静默写坏堆。
+ * ========================================================================== */
+
+/* 两个阈值不能反：LOW 必须小于 HIGH，否则 MEDIUM 区间为空，
+ * 表现是"要么双灭、要么双亮"，中间档永远进不去。 */
+#if APP_LIGHT_ENABLE && (APP_LIGHT_TH_LOW >= APP_LIGHT_TH_HIGH)
+#error "APP_LIGHT_TH_LOW must be < APP_LIGHT_TH_HIGH (BRIGHT < MEDIUM < DARK)"
+#endif
+
+/* 阈值上限：12 位 ADC 最大 4095。设到量程外，暗光档永远进不去——
+ * 与"光敏没接"的现象一模一样，是最冤的一种调参事故。 */
+#if APP_LIGHT_ENABLE && (APP_LIGHT_TH_HIGH > 4095)
+#error "APP_LIGHT_TH_HIGH requires <= 4095 (12-bit ADC full scale)"
+#endif
+
+/* 采集周期下限：100 ms。比它还密对光照毫无意义，只会白占串口带宽。 */
+#if APP_LIGHT_ENABLE && (APP_LIGHT_PERIOD_MS < 100)
+#error "APP_LIGHT_PERIOD_MS requires >= 100"
+#endif
+
+/* 滤波点数：至少 1；上限 8 是给 16 位累加和留余量的经验值
+ * （8 × 4095 = 32760，远小于 65535；uint32 求和其实更宽裕，这里只为约束配置）。 */
+#if APP_LIGHT_ENABLE && ((APP_LIGHT_FILTER_SIZE < 1) || (APP_LIGHT_FILTER_SIZE > 8))
+#error "APP_LIGHT_FILTER_SIZE requires 1 .. 8"
+#endif
+
+/* 光敏任务栈下限：同一条 512 底线（本任务实际给的就是 512） */
+#if APP_LIGHT_ENABLE && (APP_LIGHT_TASK_STACK_SIZE < 512)
+#error "APP_LIGHT_TASK_STACK_SIZE requires >= 512 (unit: BYTES = configMINIMAL_STACK_SIZE x 4)"
+#endif
+
+/* 光敏任务优先级范围：与其余任务同一条规则 */
+#if APP_LIGHT_ENABLE && ((APP_LIGHT_TASK_PRIO < 1) || (APP_LIGHT_TASK_PRIO >= 56))
+#error "APP_LIGHT_TASK_PRIO requires 1 .. (configMAX_PRIORITIES - 1), configMAX_PRIORITIES = 56"
+#endif
+
+/* ==========================================================================
+ *  十五、OLED 显示链依赖校验（2.9 新增，4 条：应用层 → 平台层 → 网络层，含两条工程约定）
+ *  ★ 这条链三跳，但平台层不单设子开关（与 mod_uart1 同一写法），
+ *    所以闸门只有"应用 → 总闸 → 总线"三层。
+ * ========================================================================== */
+
+/* ① 显示业务要落到器件驱动：app_oled 只认 MOD_OLED_* */
+#if APP_OLED_ENABLE && !MOD_OLED_ENABLE
+#error "APP_OLED_ENABLE requires MOD_OLED_ENABLE"   /* 四行布局要落到 SSD1306 的页/列接口 */
+#endif
+
+/* ② 器件驱动要有软件 I2C 总线可发 */
+#if MOD_OLED_ENABLE && !NET_I2C_SW_ENABLE
+#error "MOD_OLED_ENABLE requires NET_I2C_SW_ENABLE"   /* 命令/数据帧没有总线可发 */
+#endif
+
+/* ③ 显示初始化与互斥锁创建都在 app_taskCreate() 里：
+ *    关掉任务表时 OLED 没人初始化，代码却还在固件里白占 FLASH。
+ *    （裸机骨架场景⑧要求 APP_TASK_ENABLE = 0，此时请把 MOD_OLED_ENABLE 一并改 0） */
+#if MOD_OLED_ENABLE && !APP_TASK_ENABLE
+#error "MOD_OLED_ENABLE requires APP_TASK_ENABLE (its init runs in app_taskCreate)"
+#endif
+
+/* ④ 屏幕上的四行数据来自 DHT11 与光敏两条链：一个数据源都没有，
+ *    屏上只能永远停在占位符——这属于"配了开关却看不到东西"的悬挂配置。 */
+#if APP_OLED_ENABLE && !APP_DHT11_ENABLE && !APP_LIGHT_ENABLE
+#error "APP_OLED_ENABLE requires APP_DHT11_ENABLE or APP_LIGHT_ENABLE (no data source)"
+#endif
+
+/* ==========================================================================
+ *  十六、OLED 显示链参数体检（2.9 新增，2 条）
+ * ========================================================================== */
+
+/* 半周期下限：0 会让 sw_delay_us 的等待条件立即成立 → 时序全部消失，
+ * SSD1306 收到的是一串"没有边沿"的电平，现象与"屏坏了"一模一样。 */
+#if NET_I2C_SW_ENABLE && (NET_I2CSW_DELAY_US < 1)
+#error "NET_I2CSW_DELAY_US requires >= 1 (unit: us, half-period of software I2C)"
+#endif
+
+/* 锁等待上限：填 0 等于 osMutexAcquire 永不等待（拿不到锁立刻返回），
+ * 两个任务几乎必然互相丢帧；填太大则一次抢锁就把采集周期拖长。 */
+#if APP_OLED_ENABLE && (APP_OLED_LOCK_TIMEOUT_MS < 1)
+#error "APP_OLED_LOCK_TIMEOUT_MS requires >= 1 (unit: ms)"
 #endif
 
 #endif /* CFG_CHECK_H */

@@ -28,6 +28,11 @@
 #include "app_cmd.h"
 #include "app_blink.h"
 #include "mod_uart1.h"
+#if APP_HEX_CMD_ENABLE
+#include "protocol_hex.h"   /* 2.5 新增：8 字节帧解析器（帧格式 + CRC8） */
+#include "app_hex_cmd.h"    /* 2.5 新增：帧执行器（功能码 / 寄存器 → 动作） */
+#endif
+#include "app_task.h"    /* 同层：STACK 命令的后端（六任务栈高水位） */
 #include "cmsis_os.h"
 #include <string.h>
 #if APP_PARAM_ENABLE
@@ -55,6 +60,8 @@ static const char *const s_help =
     "  LED1 ON / LED1 OFF   LED1(PG14) on/off\r\n"
     "  BLINK                blink 1Hz (half period from cfg)\r\n"
     "  STATUS               query real LED state\r\n"
+    "  HEX                  8-byte frame: 11 CMD REG_H REG_L D_H D_L SEQ CRC8\r\n"
+    "                       frame docs: 11 02 00 10 00 02 00 13 = LED2 on\r\n"
     "  TH <t> <h>           set temp/humi thresholds, save to EEPROM\r\n"
     "  ISCAN                scan I2C addr 0x50..0x57 (who is on the bus)\r\n"
     "  PINFO                re-detect EEPROM: model / page / size\r\n"
@@ -64,8 +71,32 @@ static const char *const s_help =
     "  FDUMP [addr] [len]   dump Flash raw bytes (addr supports 0x)\r\n"
     "  LOG [n]              read log record n (0 = newest)\r\n"
     "  HANG                 simulate a hang: stop feeding IWDG, reset in ~3s\r\n"
+    "  STACK                report per-task stack high-water mark (bytes)\r\n"
     "  HELP                 show this help\r\n"
     "> ";
+
+/*----------------------------------------------------------------------------
+ * 十六进制帧速查（文本命令 HEX 打印）—— 2.5 新增
+ * ★ 输出全英文（同 s_help 的理由）；CRC 一列已按 poly=0x07 算好，
+ *   串口助手照着抄即可，不需要自己去算第 8 字节
+ *----------------------------------------------------------------------------*/
+#if APP_HEX_CMD_ENABLE
+static const char *const s_hex_help =
+    "\r\n=== HEX frame (8B, big-endian, CRC8 poly=0x07) ===\r\n"
+    "B0 ver|dev  B1 cmd  B2-B3 reg  B4-B5 data  B6 ack|seq  B7 crc\r\n"
+    "cmd: 01=read 02=write 10=led 12=heartbeat  EE=ack FF=error\r\n"
+    "reg: 0000 id  0001 fw  0010 led  0020 temp  0021 humi\r\n"
+    "     0030 t_th 0031 h_th  0100/0101 runtime\r\n"
+    "LED2 ON    11 02 00 10 00 02 00 13\r\n"
+    "LED2 OFF   11 02 00 10 00 00 00 39\r\n"
+    "ALL ON     11 02 00 10 00 03 00 06\r\n"
+    "READ LED   11 01 00 10 00 00 00 42\r\n"
+    "READ ID    11 01 00 00 00 00 00 25\r\n"
+    "HEARTBEAT  11 12 00 00 00 00 00 C0\r\n"
+    "T_TH=32    11 02 00 30 00 20 00 59\r\n"
+    "bad CRC    11 02 00 10 00 02 00 00 -> error 0x04\r\n"
+    "> ";
+#endif /* APP_HEX_CMD_ENABLE */
 
 /* ========== 内部工具 ========== */
 
@@ -566,6 +597,12 @@ static void cmd_exec(const char *cmd)
     {
         MOD_UART1_SendString(s_help);
     }
+#if APP_HEX_CMD_ENABLE
+    else if (strcmp(cmd, "HEX") == 0)
+    {
+        MOD_UART1_SendString(s_hex_help);   /* 2.5：帧格式 + 已算好 CRC 的速查表 */
+    }
+#endif
 #if APP_PARAM_ENABLE
     else if ((cmd[0] == 'T') && (cmd[1] == 'H') &&
              ((cmd[2] == ' ') || (cmd[2] == '\0')))
@@ -622,6 +659,12 @@ static void cmd_exec(const char *cmd)
         MOD_UART1_SendString("OK: HANG requested, watchdog will bite in ~3s\r\n");
     }
 #endif
+    else if (strcmp(cmd, "STACK") == 0)
+    {
+        /* 六任务栈高水位（2026-10-30 新增）：裁 FreeRTOS 堆前的机器化取数。
+         * 只读不改，随时可打；高水位要覆盖全部业务路径后读才是真实峰值 */
+        app_task_report_stacks();
+    }
     else
     {
         MOD_UART1_SendString("ERR: unknown cmd [");
@@ -715,6 +758,13 @@ void app_cmd_task(void *argument)
     uint8_t  tmp[16];                   /* 每次搬运小块，避免一次搬太多占栈 */
     uint32_t n;
     uint32_t i;
+#if APP_HEX_CMD_ENABLE
+    proto_hex_parser_t hex_parser;      /* 2.5 新增：帧解析器（状态在本任务栈上） */
+    uint8_t hex_frame[PROTO_HEX_FRAME_SIZE];  /* 收满的请求帧 */
+    uint8_t hex_reply[PROTO_HEX_FRAME_SIZE];  /* 待发的应答帧 */
+    proto_hex_ret_t hret;
+    ProtoHex_Init(&hex_parser);
+#endif
 
     (void)argument;
 
@@ -734,9 +784,40 @@ void app_cmd_task(void *argument)
 
         if (n > 0U)
         {
-            pending = 1U;   /* 有新数据进缓冲 */
             for (i = 0U; i < n; i++)
             {
+#if APP_HEX_CMD_ENABLE
+                /* ★ 2.5 双协议分流：每个字节【先试帧】。
+                 *   ProtoHex_Feed 内部只看 B0 高 4 位：是 0x1 才当帧头，
+                 *   ASCII 字符（0x20~0x7E）一律原样返回 BUSY + len==0，
+                 *   下面才会落到文本行解析 —— "二进制优先、文本兜底"。 */
+                hret = ProtoHex_Feed(&hex_parser, tmp[i], hex_frame);
+
+                if (hret == PROTO_HEX_RET_FRAME)
+                {
+                    if (APP_HexCmd_Process(hex_frame, hex_reply) != 0U)
+                    {
+                        MOD_UART1_Send(hex_reply, PROTO_HEX_FRAME_SIZE);   /* 8 字节原样回，不加任何文本 */
+                    }
+                    continue;   /* 该字节属于帧，绝不喂文本解析器 */
+                }
+                else if (hret == PROTO_HEX_RET_CRC_ERROR)
+                {
+                    /* 帧收满但 CRC 错：回 ERROR(0x04)，主站可据此重发。
+                     * 文本侧不受影响 —— 下面照常收 ASCII 命令 */
+                    if (APP_HexCmd_BuildCrcError(hex_frame, hex_reply) != 0U)
+                    {
+                        MOD_UART1_Send(hex_reply, PROTO_HEX_FRAME_SIZE);
+                    }
+                    continue;
+                }
+
+                if (hex_parser.len > 0U)
+                {
+                    continue;   /* 正在收帧中间：这些字节是被"扣下"的，不回显也不当文本 */
+                }
+#endif
+
                 if (tmp[i] == '\n')
                 {
                     line[pos] = '\0';       /* 见到换行：整行结算 */
@@ -747,6 +828,7 @@ void app_cmd_task(void *argument)
                 else if (pos < (APP_UART1_LINE_MAX - 1U))
                 {
                     line[pos++] = (char)tmp[i];   /* 攒字符（超长的丢弃，防溢出） */
+                    pending     = 1U;             /* 有文本进了行缓冲 */
                     uart_echo(tmp[i]);            /* 回显：敲什么看到什么 */
                 }
             }
@@ -762,7 +844,11 @@ void app_cmd_task(void *argument)
         }
         else
         {
-            osDelay(1U);    /* 完全空闲：让出 CPU，1ms 后再来看一眼 */
+            /* 完全空闲：让出 CPU。1ms → 5ms（2026-10-30）：
+             * 本任务是仅次于 LED 的唤醒源（原先 1000 次/s）；
+             * 5ms 轮询下命令最坏多等 5ms（人手敲命令无感知），
+             * 新到的字节在 ringbuf 里等，一个不丢。 */
+            osDelay(5U);
         }
     }
 }

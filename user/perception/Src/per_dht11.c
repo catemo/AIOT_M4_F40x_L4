@@ -23,6 +23,7 @@
 #include "per_dht11.h"
 #include "per_delay.h"     /* 同层：TIM2 微秒计时底座（1 tick = 1 µs） */
 #include "main.h"          /* DHT11_Pin / DHT11_GPIO_Port（PG9，CubeMX 生成） */
+#include "cmsis_os.h"      /* 起始信号 18 ms 等待：调度器在跑就用 osDelay 让出 CPU */
 
 /* ========== 时序参数（微秒，DHT11 协议常量：改了协议就不成立） ==========
  * 这几个数字是怎么来的（以最关键的 200 为例，见 per_dht11.h 的 stage 说明）：
@@ -93,6 +94,38 @@ static void dht11_pin_input(void)
     gpio.Mode = GPIO_MODE_INPUT;
     gpio.Pull = GPIO_NOPULL;
     HAL_GPIO_Init(DHT11_GPIO_Port, &gpio);
+}
+
+/*----------------------------------------------------------------------------
+ * 内部函数：起始信号——拉低总线并保持 ≥18 ms（DHT11_START_LOW_MS）
+ *
+ *  ★ 为什么这里用 osDelay 而不是 per_delay_ms 忙等（2026-10-30 修正）：
+ *    旧注释说"osDelay 中途被切走会破坏时序"——这个理由是错的。
+ *    拉低这个动作只写一次 ODR 寄存器，之后引脚电平由硬件保持：
+ *    CPU 睡 20 ms 期间没有任何代码会碰 PG9（本驱动非并发安全、
+ *    只有采集任务调用，见 s_fail_stage 的注释），总线就稳稳低着。
+ *    "必须连续占用 CPU"的只有后面关中断的 4~5 ms 时序关键段，
+ *    18 ms 的低电平保持根本不需要 CPU 醒着——忙等是纯浪费
+ *    （每 2 s 白占 18 ms 时间片份额）。
+ *
+ *  实现分两路：
+ *    调度器已运行（正常路径，本驱动的所有调用方都是任务）→ osDelay 睡过去；
+ *    调度器未运行（防御路径，理论上不存在）→ 回退 per_delay_ms 忙等，
+ *    因为 osDelay 在调度器启动前行为未定义，不能赌。
+ *----------------------------------------------------------------------------*/
+static void dht11_start_low_wait(void)
+{
+    dht11_pin_low();   /* 一次写入，之后电平由 ODR 硬件保持，CPU 睡不睡都一样 */
+
+    if (osKernelGetState() == osKernelRunning)
+    {
+        /* +2 ms：DHT11 只要求 ≥18 ms，osDelay(20) 保证下限 ≥19 tick，余量充分 */
+        osDelay(DHT11_START_LOW_MS + 2U);
+    }
+    else
+    {
+        per_delay_ms(DHT11_START_LOW_MS);
+    }
 }
 
 /*----------------------------------------------------------------------------
@@ -179,9 +212,9 @@ PER_DHT11_Status_t PER_DHT11_Read(PER_DHT11_Data_t *data)
     dht11_pin_high();
     per_delay_us(100U);
 
-    /* ---- 步骤 1：主机拉低 18 ms（在关中断之前：这段不需要 µs 精度） ---- */
-    dht11_pin_low();
-    per_delay_ms(DHT11_START_LOW_MS);
+    /* ---- 步骤 1：主机拉低 ≥18 ms（在关中断之前，且用 osDelay 让出 CPU：
+     *      引脚电平由 ODR 硬件保持，见 dht11_start_low_wait 的说明） ---- */
+    dht11_start_low_wait();
 
     /* ================================================================
      *  时序关键段开始
@@ -329,8 +362,7 @@ void PER_DHT11_SelfTest(PER_DHT11_Diag_t *diag)
     diag->idle_bus = dht11_pin_read();
 
     /* ③ 发一次完整起始信号，统计应答窗口内总线被拉低的次数 */
-    dht11_pin_low();
-    per_delay_ms(DHT11_START_LOW_MS);
+    dht11_start_low_wait();
     __disable_irq();
     dht11_pin_high();
     per_delay_us(DHT11_START_HIGH_US);

@@ -38,7 +38,7 @@
 #define HAL_MODULE_ENABLED
 
   /* #define HAL_CRYP_MODULE_ENABLED */
-/* #define HAL_ADC_MODULE_ENABLED */
+#define HAL_ADC_MODULE_ENABLED   /* 2.8 光敏链：与 cfg_switch.h 的 HAL_ADC_MODULE_ENABLE 成对出现 */
 /* #define HAL_CAN_MODULE_ENABLED */
 /* #define HAL_CRC_MODULE_ENABLED */
 /* #define HAL_CAN_LEGACY_MODULE_ENABLED */

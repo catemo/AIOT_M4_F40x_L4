@@ -21,7 +21,14 @@
  *      LED1 ON / LED1 OFF    点亮 / 熄灭 LED1（PG14）
  *      BLINK                 恢复 1Hz 闪烁（半周期来自 cfg）
  *      STATUS                查询 LED1 真实电平状态
+ *      HEX                   打印 8 字节帧速查表（2.5 新增）
  *      HELP                  打印帮助
+ *
+ *  ★ 2.5 新增：同一条串口还并行跑一套 8 字节十六进制帧协议。
+ *    每字节先喂 ProtoHex_Feed（protocol_hex.c），收满且 CRC 正确才交给
+ *    APP_HexCmd_Process（app_hex_cmd.c）执行并回 8 字节应答；
+ *    不是帧头的字节才落回上面的文本命令解析 —— 两套协议互不误伤。
+ *    开关：cfg_switch.h 的 APP_HEX_CMD_ENABLE（挂在 APP_UART1_ENABLE 之下）。
  ******************************************************************************
  */
 #ifndef APP_CMD_H
@@ -37,7 +44,8 @@
  * 注意事项：① 必须先于任何命令到达之前被调度起来：
  *              它内部会先 MOD_UART1_Init() 把 DMA 接收链路拉起来，
  *              这个任务没跑，串口就一个字节都收不到
- *           ② 循环里不阻塞等待数据：读不到就 osDelay(1) 让出 CPU，
+ *           ② 循环里不阻塞等待数据：读不到就 osDelay(5) 让出 CPU
+ *              （2026-10-30 由 1 放宽到 5，降低唤醒频率；字节在 ringbuf 里不丢），
  *              这与 app_led_task 的 1ms 节拍互不干扰
  *           ③ ★ 与 app_led_task 共享"闪烁状态机"：
  *              本任务执行 ON/OFF/BLINK 会改写 app_blink 里的状态数组，
