@@ -1,4 +1,4 @@
-﻿# AIOT_M4_F40x_L4a · STM32F407 四层架构「串口控灯 + DHT11 + WiFi-MQTT 上云 + 看门狗 + OLED 显示例程」
+﻿# AIOT_M4_F40x_L4 · STM32F407 四层架构「串口控灯 + DHT11 + WiFi-MQTT 上云 + 看门狗 + OLED 显示例程」
 
 ![MCU](https://img.shields.io/badge/MCU-STM32F407ZETx-1E6BFF?style=flat-square)
 ![Architecture](https://img.shields.io/badge/Architecture-4%20Layer-12B8A6?style=flat-square)
@@ -61,7 +61,7 @@
 
 ## 这是什么
 
-`proL4_p1.3_blink_v2.1b` 是一个"会闪灯"的四层工程。本工程（`AIOT_M4_F40x_L4a`）在它上面**加了三件事：串口、DHT11、WiFi-MQTT 上云**。
+`proL4_p1.3_blink_v2.1b` 是一个"会闪灯"的四层工程。本工程（`AIOT_M4_F40x_L4`）在它上面**加了三件事：串口、DHT11、WiFi-MQTT 上云**。
 
 ```text
 【1.3 串口章节】
@@ -157,7 +157,7 @@ Level: MEDIUM    ← 同上（BRIGHT / MEDIUM / DARK 六字符定宽，不残字
 | 串口助手 | 任意（sscom / Xshell / MobaXterm…） | 115200-8-N-1，**发送新行**（`\n`） |
 
 > 工具链可一次装齐：下载 ST 官方的 **STM32CubeCLT**（含 gcc / cmake / ninja）。
-> 注意：工程文件叫 `AIOT_M4_F40x_L4a.ioc`（与目录同名），里面已配好 USART1 + DMA + NVIC，用 CubeMX 打开可直接重新生成代码。
+> 注意：工程文件叫 `AIOT_M4_F40x_L4.ioc`（与目录同名），里面已配好 USART1 + DMA + NVIC，用 CubeMX 打开可直接重新生成代码。
 
 ---
 
@@ -173,8 +173,8 @@ cmake --build build/Debug
 编译产物（文件名取自工程文件夹名）：
 
 ```text
-build/Debug/AIOT_M4_F40x_L4a.elf   可执行文件（调试用）
-build/Debug/AIOT_M4_F40x_L4a.hex   Intel HEX（烧录用）
+build/Debug/AIOT_M4_F40x_L4.elf   可执行文件（调试用）
+build/Debug/AIOT_M4_F40x_L4.hex   Intel HEX（烧录用）
 ```
 
 预期输出（本次实测，**82 个构建步骤（80 个 .obj + 链接 + 生成 .hex），0 warning / 0 error**）：
@@ -191,7 +191,7 @@ Memory region         Used Size  Region Size  %age Used
 VS Code 里跑任务 `flash (ST-Link)` 或 `flash (J-Link)`；命令行等价写法：
 
 ```bash
-STM32_Programmer_CLI -c port=SWD -w build/Debug/AIOT_M4_F40x_L4a.hex -v -rst
+STM32_Programmer_CLI -c port=SWD -w build/Debug/AIOT_M4_F40x_L4.hex -v -rst
 ```
 
 ### 3. 连串口、看现象
@@ -223,14 +223,14 @@ STM32_Programmer_CLI -c port=SWD -w build/Debug/AIOT_M4_F40x_L4a.hex -v -rst
        HELP                 show this help
      >
 ④ 紧接着 DHT11 的三行上电信息：
-     === AIOT_M4_F40x_L4a DHT11 Temp/Humi (PG9) ===
+     === AIOT_M4_F40x_L4 DHT11 Temp/Humi (PG9) ===
      [DHT11] ST: TIM2=1000us loop=1,0 bus=1 resp=289     ← 自检四字段，逐个核对
      [DHT11] Link: Temp>=31C -> LED1 | Hum>=60% -> LED2   ← 生效的阈值（取自 cfg_param.h）
 ⑤ 稳定约 1 秒后，每 2 秒一行：
      [DHT11] Temp=28.0C | Hum=55.0%
 ⑥ 敲字符有回显                        ← 回显有 = 接收链路通
 ⑦ 上云任务紧接着连网（SSID / 密码 / 设备三元组填对时）：
-     === AIOT_M4_F40x_L4a WiFi-MQTT Cloud (USART3) ===
+     === AIOT_M4_F40x_L4 WiFi-MQTT Cloud (USART3) ===
      [MQTT] AT test...  →  [MQTT] AT OK
      [MQTT] WiFi join AP "your-ssid" ...  →  [MQTT] WiFi connected
      [MQTT] TCP connecting xxx.iot-mqtts.cn:1883 ...  →  [MQTT] TCP connected
@@ -283,7 +283,7 @@ STM32_Programmer_CLI -c port=SWD -w build/Debug/AIOT_M4_F40x_L4a.hex -v -rst
 ## 目录结构
 
 ```text
-AIOT_M4_F40x_L4a/
+AIOT_M4_F40x_L4/
 ├── user/                       ★ 用户代码：四层架构（68 文件 / 13513 行）
 │   ├── app/Inc, Src/           ① 应用层    app_led（闪烁业务）/ app_blink（状态机）
 │   │                                      app_cmd（命令解析）/ app_task（任务创建）
@@ -347,7 +347,7 @@ AIOT_M4_F40x_L4a/
 ├── CMakePresets.json            Debug / Release 预设
 ├── STM32F407xx_FLASH.ld        链接脚本
 ├── startup_stm32f407xx.s       启动文件
-├── AIOT_M4_F40x_L4a.ioc               CubeMX 工程文件（PG9/13/14 / TIM2 / TIM6 / CMSIS-RTOS2 / USART1+DMA / USART3+DMA）
+├── AIOT_M4_F40x_L4.ioc               CubeMX 工程文件（PG9/13/14 / TIM2 / TIM6 / CMSIS-RTOS2 / USART1+DMA / USART3+DMA）
 └── .vscode/tasks.json          VS Code 任务：configure / build / clean / rebuild / flash
 ```
 
@@ -968,10 +968,10 @@ if (snap.valid == 0U) { /* 还没采到过：如实说"没数据"，不编一个
 **下表仅用于索引**：它回答"有哪几篇文档、每篇讲什么"，**不承担现状口径的职责**；
 各篇正文各自按**写作那一年的口径**保留（见下方说明），工程当前的真实数字一律以 `cfg_*.h` 与速查表为准。
 
-> **说明**：`docs/` 为**子模块**（仓库 [AIOT_M4_F40x_L4a-docs](https://gitee.com/catemo/AIOT_M4_F40x_L4a-docs)，Gitee 侧已**公开**（任何人可读））。
+> **说明**：`docs/` 为**子模块**（仓库 [AIOT_M4_F40x_L4-docs](https://gitee.com/catemo/AIOT_M4_F40x_L4-docs)，Gitee 侧已**公开**（任何人可读））。
 > 克隆本项目后需执行 `git submodule update --init docs` 拉取文档；公开仓库，代码与 docs 均可直接 clone。
-> `.gitmodules` 用的是**相对 URL** `../AIOT_M4_F40x_L4a-docs.git`——父仓在哪一侧 clone，子模块就去哪一侧拉，
-> 因此**两侧仓库名必须一致**（主仓 `AIOT_M4_F40x_L4a` / 文档仓 `AIOT_M4_F40x_L4a-docs`）；改名必须两边同步改，只改一侧会让另一侧的 submodule 解析失效。
+> `.gitmodules` 用的是**相对 URL** `../AIOT_M4_F40x_L4-docs.git`——父仓在哪一侧 clone，子模块就去哪一侧拉，
+> 因此**两侧仓库名必须一致**（主仓 `AIOT_M4_F40x_L4` / 文档仓 `AIOT_M4_F40x_L4-docs`）；改名必须两边同步改，只改一侧会让另一侧的 submodule 解析失效。
 
 > **⚠ 本表只做索引，不是现状口径**：表中每行描述的是**那一册文档写作时**的内容与数字，
 > 各篇正文也**按各自年份的口径保留**（1.3 写 16 道闸门、1.4 写七档体积 / 29 道、2.2 写四条链 / 十档 / 40 道），

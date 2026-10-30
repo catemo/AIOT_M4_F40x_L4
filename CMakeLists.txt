@@ -19,7 +19,7 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 # Set the project name
-# set(CMAKE_PROJECT_NAME AIOT_M4_F40x_L4a)
+# set(CMAKE_PROJECT_NAME AIOT_M4_F40x_L4)
 get_filename_component(CMAKE_PROJECT_NAME
     ${CMAKE_CURRENT_SOURCE_DIR} NAME)
 
